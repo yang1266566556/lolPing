@@ -122,7 +122,8 @@ function dressWheel(ask: boolean): void {
   pingSvg.classList.toggle('ask', ask);
   const { tag, labels, disabled } = settings.ask;
   pingSvg.style.setProperty('--ask', tagColorCss(tag.color, tag.rgb));
-  pingWheel.setItems(pingsFor(settings.wheel).map((def) => (ask ? { ...pingItem(def), label: labels[def.id] } : pingItem(def))));
+  const ids = ask ? settings.ask.wheel : settings.wheel;
+  pingWheel.setItems(pingsFor(ids).map((def) => (ask ? { ...pingItem(def), label: labels[def.id] } : pingItem(def))));
   pingWheel.setDimmed(ask ? disabled : []);
   pingWheel.setCenterLabel(ask ? tag.name : null);
 }

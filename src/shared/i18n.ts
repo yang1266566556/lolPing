@@ -37,6 +37,14 @@ const enMateUi = {
   tokens: (n: number) => `${n.toLocaleString('en')} tokens`,
   used: 'Used',
   ask: 'Ask about this spot',
+  /** The words box sends the typed task to Codex instead of asking the teammate. */
+  dispatch: 'Dispatch',
+  dispatchHint: 'Sends this task to Codex to do.',
+  /** The bubble after an interactive dispatch, and the button that opens that terminal again. */
+  sentToCodex: 'Sent to Codex',
+  reopen: 'Open again',
+  /** The bubble and card after a background dispatch, once Codex has a session to resume. */
+  continueTerminal: 'Continue in terminal',
   newThread: 'New thread',
   historyTitle: 'Teammate history',
   search: 'Search',
@@ -150,6 +158,12 @@ interface MateAskText {
     /** The working folder (a fixed one, or where the thread's session was) is gone. */
     noFolder: (name: string) => string;
   };
+  /** Dispatch is on but no Codex profile has it, the terminal didn't open, or Codex printed no final message. */
+  dispatchOff: string;
+  dispatchNoTerminal: string;
+  dispatchNoMessage: string;
+  /** The card footer when the ask was handed to Codex. */
+  dispatchRoute: string;
   /** A spot refused while the ask key is held: a fifth one, or one on another display than the first. */
   spotsFull: string;
   spotsDisplay: string;
@@ -203,6 +217,10 @@ const enMateAsk: MateAskText = {
     addLolPing: (where) => ` Check that lolPing is in ${where ?? 'its MCP settings'}.`,
     noFolder: (name) => `The folder ${name} isn’t there any more.`,
   },
+  dispatchOff: 'Turn on Dispatch to Codex on a Codex profile.',
+  dispatchNoTerminal: 'Couldn’t open Codex in a terminal. Check that Codex is installed and the project folder is there.',
+  dispatchNoMessage: 'Codex finished without a message.',
+  dispatchRoute: 'Dispatch',
   spotsFull: 'Up to 4 spots per ask',
   spotsDisplay: 'Spots in one ask stay on one screen',
   spots: (n) => `${n} spots`,
@@ -287,6 +305,13 @@ const enMateSettings = {
   removeFolderLabel: (path: string) => `Remove ${path}`,
   agentTimeout: 'Time limit',
   agentTimeoutUnit: 'minutes',
+  dispatchTitle: 'Dispatch to Codex',
+  dispatchDesc: 'Hand the pinged thing to Codex to do. The last slice of the ask wheel becomes Dispatch. The ping wheel stays as it is. The first Codex profile with this on handles it.',
+  dispatchFolder: 'Working folder',
+  dispatchFolderDesc: 'The project folder above. Codex runs there.',
+  dispatchMode: 'How Codex runs',
+  dispatchInteractive: 'Open in terminal (interactive)',
+  dispatchBackground: 'Run in background and report back',
   agentArgs: 'Arguments',
   agentArgsDesc: 'One argument per line. {prompt} is the line that tells the agent to read the ask, {askDir} the folder with the ask, {mcpConfig} a file that connects the agent to lolPing.',
   agentApprovals: {
@@ -656,7 +681,7 @@ const en = {
   pingNames: {
     danger: 'Danger', push: 'Push', omw: 'On My Way', allin: 'All In', assist: 'Assist Me',
     needvision: 'Need Vision', missing: 'Enemy Missing', enemyvision: 'Enemy Vision', generic: 'Generic',
-    bait: 'Bait', visioncleared: 'Vision Cleared', missingflip: 'Upside-down Missing',
+    bait: 'Bait', visioncleared: 'Vision Cleared', missingflip: 'Upside-down Missing', dispatch: 'Dispatch',
   } as Record<PingId, string>,
 
   teammate: {
@@ -708,6 +733,10 @@ const en = {
       bait: {
         label: 'Save for later',
         instruction: 'Save the spot to history with a short title, a summary and where it came from.',
+      },
+      dispatch: {
+        label: 'Dispatch',
+        instruction: 'Hand this to Codex to do. Codex works in the profile’s project folder and can change files there.',
       },
     },
     ui: enMateUi,
@@ -1066,7 +1095,7 @@ const zh: Strings = {
   pingNames: {
     danger: '危险', push: '推进', omw: '正在赶来', allin: '全力进攻', assist: '请求协助',
     needvision: '需要视野', missing: '敌人消失', enemyvision: '敌方视野', generic: '普通信号',
-    bait: '诱饵', visioncleared: '视野已清除', missingflip: '反向问号',
+    bait: '诱饵', visioncleared: '视野已清除', missingflip: '反向问号', dispatch: '派发',
   },
 
   teammate: {
@@ -1119,6 +1148,10 @@ const zh: Strings = {
         label: '稍后看',
         instruction: '把这个位置存入历史，附上简短标题、摘要和来源。',
       },
+      dispatch: {
+        label: '派发',
+        instruction: '把这件事交给 Codex 去做。Codex 在这个配置的项目文件夹里工作，可以修改那里的文件。',
+      },
     },
     ui: {
       more: '更多',
@@ -1138,6 +1171,11 @@ const zh: Strings = {
       tokens: (n: number) => `${n.toLocaleString('zh-CN')} 个词元`,
       used: '用到',
       ask: '问问这个位置',
+      dispatch: '派发',
+      dispatchHint: '把这个任务交给 Codex 去做。',
+      sentToCodex: '已发给 Codex',
+      reopen: '再打开',
+      continueTerminal: '在终端里继续',
       newThread: '新对话',
       historyTitle: '队友历史',
       search: '搜索',
@@ -1254,6 +1292,10 @@ const zh: Strings = {
         noFolder: (name) => `文件夹 ${name} 已经不在了。`,
         addLolPing: (where) => (where === null ? '请检查它的 MCP 设置里是否加了 lolPing。' : `请检查 ${where} 里是否加了 lolPing。`),
       },
+      dispatchOff: '请在一个 Codex 配置上打开“派发给 Codex”。',
+      dispatchNoTerminal: '没能在终端里打开 Codex。请确认已安装 Codex，并且项目文件夹还在。',
+      dispatchNoMessage: 'Codex 结束了，但没有留下消息。',
+      dispatchRoute: '派发',
       spotsFull: '一次最多 4 处',
       spotsDisplay: '一次提问的几处要在同一块屏幕上',
       spots: (n) => `${n} 处`,
@@ -1316,6 +1358,13 @@ const zh: Strings = {
       removeFolderLabel: (path) => `移除 ${path}`,
       agentTimeout: '时间限制',
       agentTimeoutUnit: '分钟',
+      dispatchTitle: '派发给 Codex',
+      dispatchDesc: '把标记的内容交给 Codex 去做。提问轮盘的最后一格变成“派发”。信号轮盘保持不变。第一个打开此项的 Codex 配置会接手。',
+      dispatchFolder: '工作文件夹',
+      dispatchFolderDesc: '就是上面的项目文件夹。Codex 在那里运行。',
+      dispatchMode: 'Codex 怎么运行',
+      dispatchInteractive: '在终端中打开（交互）',
+      dispatchBackground: '在后台运行并回报',
       agentArgs: '参数',
       agentArgsDesc: '每行一个参数。{prompt} 是让代理去读提问的那一句，{askDir} 是存放提问的文件夹，{mcpConfig} 是让代理连上 lolPing 的文件。',
       agentApprovals: {

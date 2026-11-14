@@ -14,6 +14,7 @@ import { parseRoomCode } from './roomCode';
 import { sanitizeName } from './roomProtocol';
 import { isVersion } from './update';
 import type { PingTag } from './ipc';
+import { askWheelIds, showDispatch } from './teammate/dispatch';
 import { intentFor } from './teammate/intents';
 import { DEFAULT_TEAMMATE, normalizeTeammate, type TeammateSettings } from './teammate/settings';
 import { isValidWheel } from './wheelLayout';
@@ -342,8 +343,9 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     clickPing: bool(r.clickPing, 'clickPing'),
     gameCheck: bool(r.gameCheck, 'gameCheck'),
     wheelSizePx: num(r.wheelSizePx, 'wheelSizePx'),
-    clickPingId: isPingId(r.clickPingId) ? r.clickPingId : DEFAULT_CLICK_PING,
-    wheel: isValidWheel(r.wheel) ? [...r.wheel] : [...DEFAULT_WHEEL],
+    // Dispatch is an ask-wheel intent, not a ping friends can be sent. A saved wheel or click ping can't hold it.
+    clickPingId: isPingId(r.clickPingId) && r.clickPingId !== 'dispatch' ? r.clickPingId : DEFAULT_CLICK_PING,
+    wheel: roomWheel(isValidWheel(r.wheel) ? r.wheel : DEFAULT_WHEEL),
     toggleHotkey,
     textHotkey,
     panelKey: panelKey(r.panelKey, [triggerVk(pingTrigger), emoteVk, toggleHotkey.vk, textHotkey.vk]),
@@ -416,6 +418,8 @@ export type OverlaySettings = Pick<
   /** The ask wheel: the teammate's name tag, each slice's intent label, and the slices whose intent is off. */
   ask: {
     tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[];
+    /** The slices the ask wheel draws. Dispatch replaces the last one while a Codex profile has it on. */
+    wheel: PingId[];
     /** The ask key is the ping key: the ping wheel asks, and a ping click opens the words box while `click` is on. */
     onPing: boolean;
     click: boolean;
@@ -434,17 +438,29 @@ export const overlaySettings = (s: Settings, lang: Lang = 'en'): OverlaySettings
   ask: askWheel(s, lang),
 });
 
+/** Puts back a Dispatch slot with a default ping that isn't already on the wheel, so the wheel stays eight unique pings. */
+function roomWheel(ids: readonly PingId[]): PingId[] {
+  if (!ids.includes('dispatch')) return [...ids];
+  const next = [...ids];
+  for (let i = 0; i < next.length; i += 1) {
+    if (next[i] !== 'dispatch') continue;
+    next[i] = DEFAULT_WHEEL.find((id) => !next.includes(id)) ?? DEFAULT_CLICK_PING;
+  }
+  return next;
+}
+
 function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
   const t = s.teammate;
+  const wheel = askWheelIds(s.wheel, showDispatch(t));
   const labels: Partial<Record<PingId, string>> = {};
   const disabled: PingId[] = [];
-  for (const id of s.wheel) {
+  for (const id of wheel) {
     const intent = intentFor(t, id, lang);
     labels[id] = intent.label;
     if (!intent.enabled) disabled.push(id);
   }
   return {
-    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled,
+    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled, wheel,
     onPing: asksOnPing(s), click: t.askClick,
   };
 }

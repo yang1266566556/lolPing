@@ -44,7 +44,23 @@ export interface AgentProfile {
   customArgs: string[];
   folder: { kind: 'fixed'; path: string } | { kind: 'editor'; folders: string[] };
   timeoutS: number;
+  /**
+   * Hand the pinged thing to this agent to do. Off until the user turns it on. Only Codex is wired; other presets keep
+   * the field so a later one can grow a dispatch of its own. Missing on an old profile means off, in a terminal.
+   */
+  dispatch?: DispatchSettings;
 }
+
+/** How a dispatch runs: a visible terminal, or a background run that reports the final message. */
+export type DispatchMode = 'interactive' | 'background';
+
+export interface DispatchSettings {
+  on: boolean;
+  mode: DispatchMode;
+}
+
+/** What an agent profile uses when the settings file has no dispatch block. */
+export const DEFAULT_DISPATCH: DispatchSettings = { on: false, mode: 'interactive' };
 
 export type Profile = BuiltinProfile | AgentProfile;
 
@@ -207,7 +223,13 @@ function agentProfile(raw: Record<string, unknown>, id: string, name: string): A
   return {
     id, kind: 'agent', name, ...tagOf(raw), preset, command: exe, customArgs: shortStrings(raw.customArgs, MAX_ARG_LINES, true),
     folder: agentFolder(raw.folder), timeoutS: Math.min(TIMEOUT_MAX_S, Math.max(TIMEOUT_MIN_S, timeout)),
+    dispatch: normalizeDispatch(raw.dispatch),
   };
+}
+
+function normalizeDispatch(raw: unknown): DispatchSettings {
+  const d = isObj(raw) ? raw : {};
+  return { on: bool(d.on, false), mode: d.mode === 'background' ? 'background' : 'interactive' };
 }
 
 function profile(raw: unknown): Profile | null {

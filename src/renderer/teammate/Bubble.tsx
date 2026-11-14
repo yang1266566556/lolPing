@@ -68,10 +68,15 @@ export function Bubble({ s, t, act, leaving }: {
             onClick={() => act({ t: 'dismiss' })}
           />
         </div>
-        {(s.line || s.more || put) && (
+        {(s.line || s.more || put || s.follow) && (
           <div className={st.body}>
             {/* Keyed by the line, so a new line settles in instead of swapping in place. */}
             <Text key={s.line} className={mergeClasses(st.line, m.rise)}>{s.line}</Text>
+            {s.follow ? (
+              <Button key="follow" className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'follow' })}>
+                {s.follow === 'resume' ? t.continueTerminal : t.reopen}
+              </Button>
+            ) : null}
             {bubbleButtons(s.more, put).map((b) => (b === 'more' ? (
               <Button key="more" className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'more' })}>
                 {t.more}

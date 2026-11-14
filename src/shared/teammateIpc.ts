@@ -23,6 +23,8 @@ export interface WordsState {
   thread: string | null;
   /** The New thread switch starts off: the thread had activity in the last few minutes. */
   continueByDefault: boolean;
+  /** A Codex profile has Dispatch on: the box can send the words as a task for Codex to do. */
+  dispatch: boolean;
 }
 
 /** The put button the bubble and card show: Paste, Replace, Fill, Paste when ready, or none. */
@@ -39,6 +41,8 @@ export interface BubbleState {
   /** There is more than the line: the More button is shown. */
   more: boolean;
   put: PutState;
+  /** After a dispatch: open the terminal again, or resume the session Codex printed. */
+  follow?: 'reopen' | 'resume';
 }
 
 export interface CardState {
@@ -53,6 +57,8 @@ export interface CardState {
   put: PutState;
   /** An agent's unprompted answer: no reply box and no Whole picture, which would ask the user's own teammate. */
   answerOnly?: boolean;
+  /** After a dispatch: open the terminal again, or resume the session Codex printed. */
+  follow?: 'reopen' | 'resume';
 }
 
 /** One thread in the History window's list. */
@@ -142,7 +148,9 @@ export type MateAction =
   | { t: 'deep' }
   | { t: 'history' }
   | { t: 'link'; url: string }
-  | { t: 'ask'; text: string; newThread: boolean }
+  | { t: 'ask'; text: string; newThread: boolean; dispatch?: boolean }
+  /** The bubble or card button after a dispatch: open the terminal again, or resume the session. */
+  | { t: 'follow' }
   | { t: 'cancel' }
   | { t: 'open'; id: string }
   | { t: 'continue'; id: string }
@@ -194,8 +202,8 @@ const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
  * bubble and card also carry the put button.
  */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
-  bubble: new Set(['more', 'dismiss', 'put']),
-  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put']),
+  bubble: new Set(['more', 'dismiss', 'put', 'follow']),
+  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow']),
   words: new Set(['ask', 'cancel']),
   history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent']),
   consent: new Set(['allow', 'always', 'decline']),
@@ -232,6 +240,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'deep':
     case 'history':
     case 'put':
+    case 'follow':
       return { t: a.t };
     case 'cancel':
       return isSerial(a.serial) ? { t: 'cancel', serial: a.serial } : { t: 'cancel' };
@@ -244,7 +253,9 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'reply':
       return words(a.text) ? { t: 'reply', text: a.text } : null;
     case 'ask':
-      return words(a.text) && typeof a.newThread === 'boolean' ? { t: 'ask', text: a.text, newThread: a.newThread } : null;
+      return words(a.text) && typeof a.newThread === 'boolean'
+        ? { t: 'ask', text: a.text, newThread: a.newThread, ...(a.dispatch === true ? { dispatch: true } : {}) }
+        : null;
     case 'link': {
       const url = webUrl(a.url);
       return url ? { t: 'link', url } : null;

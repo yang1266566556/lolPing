@@ -142,6 +142,11 @@ export const TASKS: Readonly<Record<PingId, { name: string; brief: string }>> = 
       + 'translation in `answer`. The line is the translation of the first sentence. Ping the block with a `generic` '
       + 'ping.',
   },
+  dispatch: {
+    name: 'Dispatch',
+    brief: 'The user handed this to a coding agent to do in the working folder. This task is not answered through the '
+      + 'lolPing tools alone.',
+  },
   bait: {
     name: 'Save for later',
     brief: 'The user wants to keep this and come back to it; lolPing saves your answer in the history. The line is a '

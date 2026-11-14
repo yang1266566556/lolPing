@@ -7,7 +7,11 @@ import type { PingTag } from '../../shared/ipc';
 import type { Platform } from '../../shared/platform';
 import { sanitizeName } from '../../shared/roomProtocol';
 import type { Settings } from '../../shared/settings';
+import { resumeArgs } from '../../shared/teammate/agentProfiles';
 import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
+import {
+  codexFinalMessage, dispatchArgv, dispatchOf, dispatchProfile, dispatchPrompt, dispatchTask,
+} from '../../shared/teammate/dispatch';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
 import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
@@ -98,6 +102,10 @@ export interface AskDeps {
     home: () => string;
     /** For the editor's window title, whose separator differs on macOS. */
     platform: Platform;
+    /** Opens a terminal in `cwd` running `command` with `args`. False when it can't. */
+    openTerminal?(o: {
+      cwd: string; command: string; args: readonly string[]; extraEnv?: Record<string, string>;
+    }): Promise<boolean>;
   };
 }
 
@@ -142,6 +150,8 @@ const ALL_VISITORS = '*';
 /** An agent's error goes on the line cut to this many characters. */
 const AGENT_ERROR_MAX = 200;
 const ASK_SECRET_BYTES = 16;
+/** A dispatch bubble has a button on it, so it stays longer than a line the user only reads. */
+const DISPATCH_BUBBLE_MS = 30_000;
 
 interface Run {
   machine: AskMachine;
@@ -217,6 +227,12 @@ interface Run {
   stale: boolean;
   /** Its bubble went with the stale fade (or its line hadn't come yet): a later say brings the line back, once. */
   bubbleBack: boolean;
+  /** Dispatch leaves the ask folder: Codex reads task.md after the ask has ended. */
+  keepDir: boolean;
+  /** The bubble and card button after a dispatch. */
+  follow: 'reopen' | 'resume' | null;
+  /** What Open again runs. Resume uses the session instead. */
+  reopen: { cwd: string; command: string; args: readonly string[] } | null;
 }
 
 /** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
@@ -471,6 +487,7 @@ export class AskController extends EventEmitter {
       calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
+      keepDir: false, follow: null, reopen: null,
     };
     this.run = run;
     this.shown = run;
@@ -582,6 +599,9 @@ export class AskController extends EventEmitter {
       case 'put':
         // The click is the consent; the runner checks it belongs to the action it has for this ask.
         if (run?.info && (view === 'bubble' || view === 'card')) void this.deps.actions?.put(run.info, view);
+        break;
+      case 'follow':
+        if (run) void this.followDispatch(run);
         break;
       default:
         break;
@@ -771,6 +791,7 @@ export class AskController extends EventEmitter {
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
       box: null, info: null, stale: false, bubbleBack: false,
+      keepDir: false, follow: null, reopen: null,
     };
   }
 
@@ -786,7 +807,9 @@ export class AskController extends EventEmitter {
     } finally {
       // Also when the ask was cancelled mid-capture: context-helper may still write into the folder, and fails once
       // it is gone. Whatever slips past that is removed with the whole temp folder when the teammate stops or starts.
-      this.files.removeDir(run.dir).catch(() => undefined);
+      // A dispatch leaves the folder: the terminal's Codex reads task.md after this ask has ended. The temp root
+      // still goes when the teammate starts or stops.
+      if (!run.keepDir) this.files.removeDir(run.dir).catch(() => undefined);
     }
   }
 
@@ -802,6 +825,7 @@ export class AskController extends EventEmitter {
     run.app = front.app;
     run.title = front.title;
     run.window = front.window;
+    if (run.intent.def.kind === 'dispatch') return this.dispatchAsk(run, reading);
     if (front.profile && !isBuiltin(front.profile)) return this.askAgent(run, front.profile, front.route, reading);
     const profile = front.profile && isBuiltin(front.profile) ? front.profile : null;
     const { key } = front;
@@ -951,6 +975,140 @@ export class AskController extends EventEmitter {
       instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
       file: layers.file, fields: layers.fields,
     };
+  }
+
+  /** Opens the dispatch terminal again, or resumes the session Codex printed. */
+  private async followDispatch(run: Run): Promise<void> {
+    const agents = this.deps.agents;
+    const open = agents?.openTerminal;
+    if (!open) return;
+    if (run.follow === 'resume' && run.session && run.profile?.kind === 'agent') {
+      const args = resumeArgs(run.profile, run.session.session);
+      if (args) {
+        await open({ cwd: run.session.cwd, command: run.profile.command, args });
+        return;
+      }
+    }
+    if (run.reopen) await open({ cwd: run.reopen.cwd, command: run.reopen.command, args: run.reopen.args });
+  }
+
+  /** The bubble, and for a background run the card as well, so both carry the follow button. */
+  private showDispatchSurfaces(run: Run, card: boolean): void {
+    this.deps.overlay.mateSaid();
+    this.showLine(run, run.line);
+    if (!card) return;
+    const at = this.popupAt(run);
+    this.deps.windows.showCard({ x: at.x, y: at.y + 96 }, this.cardState(run, false));
+    this.cardShown = true;
+    this.clearTimer('fade');
+  }
+
+  /**
+   * Hands the ask to Codex to do. Interactive opens a terminal on the task. Background runs `codex exec` with that
+   * same task prompt, then shows Codex's final message. The headless "answer only with the lolping tools" prompt is
+   * not used. The ask folder keeps task.md and the screenshots; an interactive run leaves the folder for Codex to read.
+   */
+  private async dispatchAsk(run: Run, reading: Reading): Promise<void> {
+    const { agents } = this.deps;
+    const words = strings(run.lang).teammate.ask;
+    const ui = strings(run.lang).teammate.ui;
+    const profile = dispatchProfile(this.deps.settings().teammate.profiles);
+    for (const d of run.deadlines) clearTimeout(d);
+    run.deadlines = [];
+    if (!profile) return this.fail(run, 'noProfile', words.dispatchOff);
+    const mode = dispatchOf(profile).mode;
+    if (!agents?.openTerminal) return this.fail(run, 'agentStart', words.agent.noBridge);
+    run.profile = profile;
+    run.route = words.dispatchRoute;
+    this.deadline(run, profile.timeoutS * 1000, () => {
+      if (!this.alive(run)) return;
+      if (!drew(run)) this.fail(run, 'timeout');
+      else this.finish(run).catch((err: unknown) => console.warn('[teammate] ask failed:', err));
+    });
+    const token = `${run.machine.id}.${randomBytes(ASK_SECRET_BYTES).toString('hex')}`;
+    const bridge = agents.bridge.command(token);
+    if (!bridge) return this.fail(run, 'agentStart', words.agent.noBridge);
+    if (!run.display) return this.fail(run, 'capture');
+    run.machine.startGathering();
+
+    const scene = await reading.scene();
+    if (!scene || !this.alive(run)) return;
+    const ctx = this.useScene(run, scene);
+    const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
+    run.cwd = folder.path;
+    run.folder = folder.label;
+    const images = {
+      overview: baseName(scene.cap.overviewPath), zooms: scene.cap.zooms.map((z) => baseName(z.path)),
+    };
+    const focus = ctx.system?.focus;
+    const focusText = focus && !focus.secure && focus.value !== '' ? `${focus.label}: ${focus.value}` : '';
+    const spotText = [focusText, ...(ctx.system?.spotTexts ?? [])].filter((s) => s.trim() !== '').join('\n');
+    await this.files.write(join(run.dir, 'task.md'), dispatchTask({
+      askDir: run.dir, folder: folder.path, words: run.words, app: run.app, title: run.title,
+      selection: ctx.system?.selection ?? '', text: spotText, images, instructions: ctx.instructions,
+    }));
+    if (!this.alive(run)) return;
+    const argv = dispatchArgv(profile.preset, mode, bridge, run.dir, folder.path);
+    if (!argv) return this.fail(run, 'agentStart', words.dispatchOff);
+    run.machine.sent();
+
+    if (mode === 'interactive') {
+      const opened = await agents.openTerminal({
+        cwd: folder.path, command: profile.command, args: argv, extraEnv: { LOLPING_ASK_DIR: run.dir },
+      });
+      if (!this.alive(run)) return;
+      if (!opened) return this.fail(run, 'agentStart', words.dispatchNoTerminal);
+      run.keepDir = true;
+      run.follow = 'reopen';
+      run.reopen = { cwd: folder.path, command: profile.command, args: argv };
+      run.line = ui.sentToCodex;
+      run.said = ui.sentToCodex;
+      this.received(run);
+      this.showDispatchSurfaces(run, false);
+      await this.finish(run);
+      return;
+    }
+
+    const spec: AgentRunSpec = {
+      prompt: dispatchPrompt(run.dir, folder.path), askDir: run.dir, bridge, resume: null,
+      mcpConfigPath: join(run.dir, 'mcp.json'), argv,
+    };
+    let agentRun: AgentRun;
+    try {
+      const env = await agents.env();
+      if (!this.alive(run)) return;
+      agentRun = await agents.runner.start(profile, spec, folder.path, env);
+    } catch (err) {
+      if (!(err instanceof AgentStartError) || !this.alive(run)) throw err;
+      const { command } = profile;
+      const line = err.kind === 'notFound' ? words.agent.notFound(command)
+        : err.kind === 'noFolder' ? words.agent.noFolder(baseName(folder.path)) : words.agent.noStart(command);
+      return this.fail(run, 'agentStart', line);
+    }
+    if (!this.alive(run)) return agentRun.kill();
+    run.agentRun = agentRun;
+    run.abort.signal.addEventListener('abort', () => agentRun.kill(), { once: true });
+    this.received(run);
+    const result = await agentRun.done;
+    if (!this.alive(run)) return;
+    const message = codexFinalMessage(result.tail);
+    if ((result.code !== 0 && result.code !== null) && message === null) {
+      const error = result.error?.trim() ?? '';
+      const name = AGENT_PRESETS.codex.name;
+      return this.fail(run, 'agent', error
+        ? words.agent.error(name, error.slice(0, AGENT_ERROR_MAX)) : words.agent.stopped(name));
+    }
+    const body = message ?? words.dispatchNoMessage;
+    const split = splitLine(body, run.lang);
+    run.line = split.line;
+    run.said = split.line;
+    run.rest = split.rest;
+    // The line is the first sentence. The card keeps only what follows it.
+    if (split.rest) run.markdown = [split.rest];
+    this.keepSession(run, result.session);
+    if (run.session) run.follow = 'resume';
+    this.showDispatchSurfaces(run, true);
+    await this.finish(run);
   }
 
   /**
@@ -1447,7 +1605,7 @@ export class AskController extends EventEmitter {
   private armBubble(run: Run, line: string): void {
     this.clearTimer('bubble');
     if (this.asking) return; // onAsking(false) starts its time
-    const ms = bubbleMs(line);
+    const ms = run.follow ? DISPATCH_BUBBLE_MS : bubbleMs(line);
     this.bubbleEndsAt = this.deps.now() + ms;
     this.bubbleTimer = this.timer(ms, () => {
       this.bubbleTimer = null;
@@ -1461,6 +1619,7 @@ export class AskController extends EventEmitter {
       // An answer's line always offers More, if only for the card's reply box; a failure's line doesn't.
       more: run.rest !== '' || run.markdown.length > 0 || (line !== '' && run.machine.failure === null),
       put: run.visitor ? null : this.put,
+      ...(run.follow ? { follow: run.follow } : {}),
     };
   }
 
@@ -1496,6 +1655,7 @@ export class AskController extends EventEmitter {
       },
       put: run.visitor ? null : this.put,
       ...(run.visitor ? { answerOnly: true } : {}),
+      ...(run.follow ? { follow: run.follow } : {}),
     };
   }
 
