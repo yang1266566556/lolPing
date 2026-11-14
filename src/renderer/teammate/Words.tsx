@@ -1,4 +1,4 @@
-import { Caption1, Input, makeStyles, mergeClasses, Switch, tokens } from '@fluentui/react-components';
+import { Button, Caption1, Input, makeStyles, mergeClasses, Switch, tokens } from '@fluentui/react-components';
 import { useEffect, useRef, useState } from 'react';
 import type { Strings } from '../../shared/i18n';
 import { MATE_TEXT_MAX, type MateAction, type WordsState } from '../../shared/teammateIpc';
@@ -35,9 +35,12 @@ export function Words({ s, t, act }: { s: WordsState; t: Strings['teammate']['ui
     input.current?.focus();
   }, []);
 
-  const ask = (): void => {
+  const ask = (dispatch = false): void => {
     const words = text.trim();
-    if (words) act({ t: 'ask', text: words, newThread: s.thread === null || newThread });
+    if (!words) return;
+    act({
+      t: 'ask', text: words, newThread: s.thread === null || newThread, ...(dispatch ? { dispatch: true } : {}),
+    });
   };
   return (
     <div className={sf.frame}>
@@ -73,6 +76,12 @@ export function Words({ s, t, act }: { s: WordsState; t: Strings['teammate']['ui
             else if (e.key === 'Escape') act({ t: 'cancel' });
           }}
         />
+        {s.dispatch ? (
+          <div className={st.head}>
+            <Button appearance="primary" onClick={() => ask(true)}>{t.dispatch}</Button>
+            <Caption1 className={st.thread}>{t.dispatchHint}</Caption1>
+          </div>
+        ) : null}
       </div>
     </div>
   );

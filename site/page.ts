@@ -19,6 +19,7 @@ const MEANINGS: Record<PingId, string> = {
   bait: 'Act weak and lure them in.',
   visioncleared: 'Their ward here is gone.',
   missingflip: 'Enemy Missing, upside down.',
+  dispatch: 'Hand this to Codex to do.',
 };
 
 const $ = <T extends HTMLElement>(sel: string): T => document.querySelector(sel) as T;

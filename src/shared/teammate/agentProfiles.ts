@@ -1,5 +1,5 @@
 import { AGENT_PRESETS, type AgentPresetId } from './agents';
-import { MAX_FOLDERS, PATH_MAX, TIMEOUT_DEFAULT_S, type AgentProfile, type Profile } from './settings';
+import { MAX_FOLDERS, PATH_MAX, TIMEOUT_DEFAULT_S, type AgentProfile, type DispatchSettings, type Profile } from './settings';
 
 const TIMEOUT_MIN_MINUTES = 1;
 const TIMEOUT_MAX_MINUTES = 30;
@@ -15,6 +15,7 @@ export function newAgentProfile(
     id: o.id, kind: 'agent', name: preset ? preset.name : o.customName, tagColor: o.tagColor, tagColorCustom: null,
     preset: o.preset, command: preset ? preset.bin : CUSTOM_COMMAND, customArgs: preset ? [] : ['{prompt}'],
     folder: { kind: 'editor', folders: [] }, timeoutS: TIMEOUT_DEFAULT_S,
+    dispatch: { on: false, mode: 'interactive' } satisfies DispatchSettings,
   };
 }
 

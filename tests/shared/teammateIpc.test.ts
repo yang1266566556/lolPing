@@ -23,10 +23,11 @@ const SAMPLES: Record<string, unknown> = {
   decline: { t: 'decline', serial: 1 },
   fill: { t: 'fill', ids: ['f1', 'f2'], serial: 1 },
   put: { t: 'put' },
+  follow: { t: 'follow' },
 };
 const ALLOWED: Record<MateView, string[]> = {
-  bubble: ['more', 'dismiss', 'put'],
-  card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put'],
+  bubble: ['more', 'dismiss', 'put', 'follow'],
+  card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow'],
   words: ['ask', 'cancel'],
   history: ['open', 'continue', 'delete', 'search', 'openInAgent'],
   consent: ['allow', 'always', 'decline'],

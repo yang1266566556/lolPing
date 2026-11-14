@@ -296,7 +296,14 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
           })}
         </div>
         {/* The put button is last: its arrival moves none of the others from under the pointer. */}
-        <div className={st.buttons}>{cardButtons(put, s.answerOnly).map(button)}</div>
+        <div className={st.buttons}>
+          {s.follow ? (
+            <Button size="small" appearance="primary" onClick={() => act({ t: 'follow' })}>
+              {s.follow === 'resume' ? t.continueTerminal : t.reopen}
+            </Button>
+          ) : null}
+          {cardButtons(put, s.answerOnly).map(button)}
+        </div>
         {!s.answerOnly && <Input
           className={st.reply}
           size="small"

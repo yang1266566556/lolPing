@@ -25,6 +25,7 @@ import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
 import { openInRows, resumableProfile, resumeArgs } from '../shared/teammate/agentProfiles';
+import { showDispatch } from '../shared/teammate/dispatch';
 import { wordsContinuesByDefault } from '../shared/teammate/threads';
 import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
@@ -835,7 +836,8 @@ function start(): void {
       const last = spots?.at(-1);
       if (action.t !== 'ask' || !spots || !last) return;
       // The words are the question, whatever slice the held spots were released on.
-      const asked = [...spots.slice(0, -1), { ...last, intent: 'generic' as const }];
+      const intent = action.dispatch ? 'dispatch' as const : 'generic' as const;
+      const asked = [...spots.slice(0, -1), { ...last, intent }];
       m.controller.ask(asked, { text: action.text, newThread: action.newThread });
       return;
     }
@@ -932,6 +934,14 @@ function start(): void {
         env: userEnv,
         home: () => app.getPath('home'),
         platform: PLATFORM,
+        openTerminal: async ({ cwd, command, args, extraEnv }) => {
+          const env: NodeJS.ProcessEnv = { ...await userEnv(), ...extraEnv };
+          // The same as the headless runner: an Electron switch must not follow Codex into the terminal.
+          delete env.ELECTRON_RUN_AS_NODE;
+          const file = findExecutable(command, searchPath(env, PLATFORM), PLATFORM, isExecutable);
+          return file !== null && isDirectory(cwd)
+            && launchTerminal({ spawn, platform: PLATFORM, cwd, file, args, env });
+        },
       },
       settings: () => settings,
       lang: mateLang,
@@ -1054,6 +1064,7 @@ function start(): void {
       m.windows.showWords(overlays.toDip(last.phys) ?? overlays.primaryDip(), {
         view: 'words', lang: mateLang(), tag: mateTag(), thread: current?.title ?? null,
         continueByDefault: wordsContinuesByDefault(current, Date.now()),
+        dispatch: showDispatch(settings.teammate),
       });
     } catch (err) {
       console.warn('[teammate] words box:', err);

@@ -385,7 +385,7 @@ export class OverlayManager extends EventEmitter {
     const open = this.wheelAt;
     if (!open || open.local.displayId !== at.displayId) return;
     const slice = pickSlice(at.x - open.local.x, at.y - open.local.y, (WHEEL.innerR * this.settings.wheelSizePx) / WHEEL.size);
-    const id = slice >= 0 ? this.settings.wheel[slice] : undefined;
+    const id = slice >= 0 ? this.settings.ask.wheel[slice] : undefined;
     if (id === undefined) return;
     if (this.settings.ask.disabled.includes(id)) {
       // On the ping key a switched-off intent is just a ping, as it was before the teammate.

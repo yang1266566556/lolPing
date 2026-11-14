@@ -13,6 +13,11 @@ export interface AgentRunSpec {
   mcpConfigPath: string;
   bridge: { command: string; args: string[]; env: Record<string, string> };
   resume: string | null;
+  /**
+   * Replaces the preset's usual arguments for this run. Dispatch sets it so the agent does the task instead of only
+   * answering through lolPing's tools. Absent: the preset's own args.
+   */
+  argv?: string[];
 }
 
 export interface AgentParsed { session?: string; error?: string }
@@ -129,6 +134,15 @@ function settingsConfig(s: AgentRunSpec): string {
 
 const withResume = (s: AgentRunSpec, flag: string[]): string[] => (s.resume === null ? [] : [...flag, s.resume]);
 
+/** The `-c` overrides that attach lolPing's bridge. Codex has no config-file flag, so both exec and a terminal use these. */
+export function codexMcpArgs(bridge: AgentRunSpec['bridge']): string[] {
+  return [
+    '-c', `mcp_servers.lolping.command=${tomlString(bridge.command)}`,
+    '-c', `mcp_servers.lolping.args=${JSON.stringify(bridge.args)}`,
+    '-c', `mcp_servers.lolping.env=${tomlTable(bridge.env)}`,
+  ];
+}
+
 function tomlTable(env: Record<string, string>): string {
   const pairs = Object.entries(env).map(([k, v]) => `${tomlKey(k)} = ${tomlString(v)}`);
   return pairs.length === 0 ? '{}' : `{ ${pairs.join(', ')} }`;
@@ -236,10 +250,7 @@ export const AGENT_PRESETS: Readonly<Record<AgentPresetId, AgentPreset>> = {
     id: 'codex', name: 'Codex', bin: 'codex', checked: false, consent: false, mcp: 'run', approvals: 'own',
     // Codex has no config-file flag, so the bridge goes in as -c overrides; options come before `resume`.
     args: (s) => [
-      'exec', '--json', '--skip-git-repo-check',
-      '-c', `mcp_servers.lolping.command=${tomlString(s.bridge.command)}`,
-      '-c', `mcp_servers.lolping.args=${JSON.stringify(s.bridge.args)}`,
-      '-c', `mcp_servers.lolping.env=${tomlTable(s.bridge.env)}`,
+      'exec', '--json', '--skip-git-repo-check', ...codexMcpArgs(s.bridge),
       ...(s.resume === null ? [] : ['resume', s.resume]), s.prompt,
     ],
     configFile: noConfig,

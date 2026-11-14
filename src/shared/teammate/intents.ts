@@ -2,7 +2,7 @@ import { strings, type Lang } from '../i18n';
 import type { PingId } from '../pings';
 import type { TeammateSettings } from './settings';
 
-export type IntentKind = 'answer' | 'continue' | 'guide' | 'act' | 'grab' | 'words' | 'save';
+export type IntentKind = 'answer' | 'continue' | 'guide' | 'act' | 'grab' | 'words' | 'save' | 'dispatch';
 
 export interface IntentDef {
   id: PingId;
@@ -29,6 +29,7 @@ export const INTENTS: Readonly<Record<PingId, IntentDef>> = {
   visioncleared: def('visioncleared', 'act'),
   missingflip: def('missingflip', 'answer', { autoCard: true }),
   bait: def('bait', 'save'),
+  dispatch: def('dispatch', 'dispatch'),
 };
 
 /** A user override wins; an empty override string means "use the default". */
