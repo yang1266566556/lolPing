@@ -8,6 +8,7 @@ const SAMPLES: Record<string, unknown> = {
   close: { t: 'close' },
   copy: { t: 'copy', text: 'npm test' },
   reply: { t: 'reply', text: 'and the second one?' },
+  preset: { t: 'preset', id: 'page' },
   deep: { t: 'deep' },
   history: { t: 'history' },
   link: { t: 'link', url: 'https://example.com/a' },
@@ -28,7 +29,7 @@ const SAMPLES: Record<string, unknown> = {
 };
 const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss', 'put', 'follow'],
-  card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow'],
+  card: ['close', 'copy', 'reply', 'preset', 'deep', 'history', 'link', 'put', 'follow'],
   words: ['ask', 'cancel'],
   history: ['open', 'continue', 'delete', 'search', 'openInAgent', 'openCodex'],
   consent: ['allow', 'always', 'decline'],

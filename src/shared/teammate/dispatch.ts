@@ -35,6 +35,19 @@ export interface PingLine {
 /** The teammate's own lines. The wording lives in i18n; this only picks which one. */
 export type DesktopLine = 'seeIt' | 'gotIt' | 'onIt';
 
+/** Stable ids for the five prompts offered while the teammate is asking what you need. Not the visible label. */
+export const CODEX_PROMPT_IDS = ['page', 'debug', 'explain', 'clearer', 'asked'] as const;
+export type CodexPromptId = (typeof CODEX_PROMPT_IDS)[number];
+
+export function isCodexPromptId(v: unknown): v is CodexPromptId {
+  return typeof v === 'string' && (CODEX_PROMPT_IDS as readonly string[]).includes(v);
+}
+
+/** The chips on the record card. Only while Codex desktop is waiting for a reply. */
+export function waitingPrompts(waiting: boolean): readonly CodexPromptId[] | null {
+  return waiting ? CODEX_PROMPT_IDS : null;
+}
+
 export interface DesktopPing {
   id: 'generic' | 'omw';
   line: DesktopLine;
@@ -101,16 +114,19 @@ export interface DesktopContext {
   /** The profile's working folder. Included in the link only when it is absolute. */
   folder: string;
   conversation: readonly PingLine[];
+  /**
+   * The full instruction of a chip the user tapped. It leads the prompt. Absent for a typed reply or another ping,
+   * which stay a look at the signal with no task added.
+   */
+  instruction?: string;
 }
 
 /**
  * What Codex's composer is filled with. It points at the saved screen and the ping thread.
  * It does not name a task the user did not say, and it does not tell Codex to answer only with lolPing's tools.
  */
-export function codexDesktopPrompt(input: DesktopContext): string {
+function contextLines(input: DesktopContext): string[] {
   const lines = [
-    'Look at this signal. Do not invent a task.',
-    '',
     `Read the record: ${input.recordPath}`,
     `Screen: ${input.overviewPath}`,
   ];
@@ -128,11 +144,21 @@ export function codexDesktopPrompt(input: DesktopContext): string {
     const who = turn.who === 'user' ? 'User' : 'Teammate';
     lines.push(`- ${who} (${turn.ping}): ${turn.text.replace(/\s+/g, ' ').trim()}`);
   }
-  lines.push(
+  return lines;
+}
+
+export function codexDesktopPrompt(input: DesktopContext): string {
+  const context = contextLines(input);
+  const instruction = input.instruction?.trim() ?? '';
+  // A chosen prompt is the task. Anything else stays a look at the signal, with no task added on.
+  if (instruction !== '') return [instruction, '', ...context].join('\n');
+  return [
+    'Look at this signal. Do not invent a task.',
+    '',
+    ...context,
     '',
     'Continue from what the user said. If they have not said what they want, ask them. Do not invent a task.',
-  );
-  return lines.join('\n');
+  ].join('\n');
 }
 
 /**

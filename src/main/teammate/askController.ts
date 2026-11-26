@@ -10,7 +10,7 @@ import type { Settings } from '../../shared/settings';
 import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
 import {
   absoluteFolder, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isCodexDesktopUrl,
-  type PingLine,
+  waitingPrompts, type CodexPromptId, type PingLine,
 } from '../../shared/teammate/dispatch';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
 import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
@@ -239,6 +239,8 @@ interface Run {
   follow: 'codex' | null;
   /** The link and the screenshot folder, stored with the thread. */
   codexLink: { url: string; dirId: string } | null;
+  /** Chips on the card. Only the ask that is still waiting for a reply has them. */
+  prompts: readonly CodexPromptId[] | null;
 }
 
 /** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
@@ -417,6 +419,8 @@ export class AskController extends EventEmitter {
   private thread: ThreadRecord | null = null;
   /** A thread opened from History that the card shows; its reply box continues it. */
   private viewed: ThreadRecord | null = null;
+  /** A chip tapped on the waiting card. The next desktop reply uses its instruction; a typed reply leaves this null. */
+  private pendingPrompt: CodexPromptId | null = null;
   /** A signal whose teammate already asked what the user needs. The next reply on that thread opens Codex. */
   private codexWait: {
     threadId: string;
@@ -509,7 +513,7 @@ export class AskController extends EventEmitter {
       calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, codexLink: null,
+      keepDir: false, follow: null, codexLink: null, prompts: null,
     };
     this.run = run;
     this.shown = run;
@@ -616,6 +620,14 @@ export class AskController extends EventEmitter {
       // An agent's card has neither: they would ask the user's own teammate about the agent's answer.
       case 'reply':
         if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'generic' }], { text: a.text, newThread: false });
+        break;
+      case 'preset':
+        // A chip is a reply on this signal. The short label is what the thread shows; the long instruction goes to Codex.
+        if (run && !run.visitor && this.codexWait && this.thread?.id === this.codexWait.threadId) {
+          this.pendingPrompt = a.id;
+          const label = strings(run.lang).teammate.ui.prompts[a.id].label;
+          this.ask([{ ...run.spot, intent: 'generic' }], { text: label, newThread: false });
+        }
         break;
       case 'deep':
         if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'allin' }]);
@@ -815,7 +827,7 @@ export class AskController extends EventEmitter {
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
       box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, codexLink: null,
+      keepDir: false, follow: null, codexLink: null, prompts: null,
     };
   }
 
@@ -849,6 +861,7 @@ export class AskController extends EventEmitter {
     run.title = front.title;
     run.window = front.window;
     if (dispatchProfile(this.deps.settings().teammate.profiles)) return this.desktopAsk(run, reading);
+    this.pendingPrompt = null;
     if (front.profile && !isBuiltin(front.profile)) return this.askAgent(run, front.profile, front.route, reading);
     const profile = front.profile && isBuiltin(front.profile) ? front.profile : null;
     const { key } = front;
@@ -1082,10 +1095,12 @@ export class AskController extends EventEmitter {
   private async rewriteSignal(
     held: NonNullable<AskController['codexWait']>,
     conversation: PingLine[],
+    instruction?: string,
   ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string }> {
     await this.files.write(held.recordPath, codexDesktopPrompt({
       overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
-      app: held.app, title: held.title, selection: held.selection, text: held.text, folder: held.folder, conversation,
+      app: held.app, title: held.title, selection: held.selection, text: held.text, folder: held.folder,
+      conversation, ...(instruction ? { instruction } : {}),
     }));
     return {
       dirId: held.dirId, overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
@@ -1100,6 +1115,9 @@ export class AskController extends EventEmitter {
     const { agents } = this.deps;
     const words = strings(run.lang).teammate.ask;
     const ui = strings(run.lang).teammate.ui;
+    const replying = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
+    const chosen = replying ? this.pendingPrompt : null;
+    this.pendingPrompt = null;
     const profile = dispatchProfile(this.deps.settings().teammate.profiles);
     for (const d of run.deadlines) clearTimeout(d);
     run.deadlines = [];
@@ -1119,28 +1137,29 @@ export class AskController extends EventEmitter {
     const focusText = focus && !focus.secure && focus.value !== '' ? `${focus.label}: ${focus.value}` : '';
     const spotText = [focusText, ...(ctx.system?.spotTexts ?? [])].filter((s) => s.trim() !== '').join('\n');
     const selection = ctx.system?.selection ?? '';
-    const replying = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
     const prior = replying && this.codexWait ? this.codexWait.conversation : [];
     const userText = run.words?.trim() || run.intent.label;
+    const instruction = chosen ? strings(run.lang).teammate.ui.prompts[chosen].body : undefined;
     const conversation: PingLine[] = [...prior, { who: 'user', ping: run.intent.def.id, text: userText }];
     const step = desktopPings({ words: run.words, replying });
     for (const ping of step.pings) conversation.push({ who: 'teammate', ping: ping.id, text: ui[ping.line] });
 
     const held = replying ? this.codexWait : null;
     const saved = held
-      ? await this.rewriteSignal(held, conversation)
+      ? await this.rewriteSignal(held, conversation, instruction)
       : await this.saveSignal(run, scene, conversation, folder.path, selection, spotText);
     if (!saved || !this.alive(run)) return;
     const prompt = codexDesktopPrompt({
       overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths, recordPath: saved.recordPath,
       app: held?.app ?? run.app, title: held?.title ?? run.title,
       selection: held?.selection ?? selection, text: held?.text ?? spotText,
-      folder: held?.folder ?? folder.path, conversation,
+      folder: held?.folder ?? folder.path, conversation, ...(instruction ? { instruction } : {}),
     });
     const url = codexDesktopUrl(prompt, absoluteFolder(held?.folder ?? folder.path));
     // The link is stored once Codex is actually opened, so History doesn't offer it while the teammate is still asking.
     run.codexLink = step.open ? { url, dirId: saved.dirId } : null;
     run.follow = step.open ? 'codex' : null;
+    run.prompts = waitingPrompts(!step.open);
     const lastPing = step.pings[step.pings.length - 1];
     if (!lastPing) return;
     run.line = ui[lastPing.line];
@@ -1721,6 +1740,7 @@ export class AskController extends EventEmitter {
       put: run.visitor ? null : this.put,
       ...(run.visitor ? { answerOnly: true } : {}),
       ...(run.follow ? { follow: run.follow } : {}),
+      ...(run.prompts ? { prompts: run.prompts } : {}),
     };
   }
 

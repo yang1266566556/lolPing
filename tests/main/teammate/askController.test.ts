@@ -2082,6 +2082,7 @@ describe('AskController', () => {
     expect(h.pings().map((p) => p.id)).toEqual(['generic']);
     expect(h.appends.at(-1)?.line).toBe(t.ui.seeIt);
     expect(h.cards().at(-1)?.follow).toBeUndefined();
+    expect(h.cards().at(-1)?.prompts).toEqual(['page', 'debug', 'explain', 'clearer', 'asked']);
 
     h.ctl.ask([spot('generic')], { text: 'look at the null check', newThread: false });
     await flush();
@@ -2091,5 +2092,50 @@ describe('AskController', () => {
     expect(opened[0]).not.toContain('answer only');
     expect(h.pings().map((p) => p.id)).toEqual(['generic', 'omw']);
     expect(h.cards().at(-1)?.follow).toBe('codex');
+    expect(h.cards().at(-1)?.prompts).toBeUndefined();
+  });
+
+  it('opens Codex from a prompt chip, and a typed reply stays without that instruction', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const promptOf = (url: string): string => {
+      const q = url.slice(url.indexOf('prompt=') + 'prompt='.length).split('&')[0] ?? '';
+      return decodeURIComponent(q);
+    };
+    const chip = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    chip.ctl.ask([spot('generic')]);
+    await flush();
+    chip.ctl.onTeammateAction('card', { t: 'preset', id: 'page' });
+    await flush();
+    const filled = promptOf(opened[0] ?? '');
+    expect(filled.startsWith(t.ui.prompts.page.body)).toBe(true);
+    expect(filled).toContain(`User (generic): ${t.ui.prompts.page.label}`);
+    expect(filled).not.toContain('Look at this signal. Do not invent a task.');
+    expect(chip.pings().map((p) => p.id)).toEqual(['generic', 'omw']);
+
+    opened.length = 0;
+    const typed = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    typed.ctl.ask([spot('generic')]);
+    await flush();
+    typed.ctl.onTeammateAction('card', { t: 'reply', text: 'look at the null check' });
+    await flush();
+    const own = promptOf(opened[0] ?? '');
+    expect(own.startsWith('Look at this signal. Do not invent a task.')).toBe(true);
+    expect(own).toContain('look at the null check');
+    expect(own).not.toContain(t.ui.prompts.page.body);
   });
 });

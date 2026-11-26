@@ -1,3 +1,4 @@
+import { isCodexPromptId, type CodexPromptId } from './teammate/dispatch';
 import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
@@ -57,6 +58,8 @@ export interface CardState {
   answerOnly?: boolean;
   /** Opens the saved Codex desktop link again. */
   follow?: 'codex';
+  /** Set only while Codex desktop is waiting for a reply. The ids, not the labels. */
+  prompts?: readonly CodexPromptId[];
 }
 
 /** One thread in the History window's list. */
@@ -145,6 +148,8 @@ export type MateAction =
   | { t: 'close' }
   | { t: 'copy'; text: string }
   | { t: 'reply'; text: string }
+  /** A pre-written prompt on the waiting card. The id is stable; the label is not the instruction. */
+  | { t: 'preset'; id: CodexPromptId }
   | { t: 'deep' }
   | { t: 'history' }
   | { t: 'link'; url: string }
@@ -204,7 +209,7 @@ const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
  */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
   bubble: new Set(['more', 'dismiss', 'put', 'follow']),
-  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow']),
+  card: new Set(['close', 'copy', 'reply', 'preset', 'deep', 'history', 'link', 'put', 'follow']),
   words: new Set(['ask', 'cancel']),
   history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent', 'openCodex']),
   consent: new Set(['allow', 'always', 'decline']),
@@ -253,6 +258,8 @@ function parse(a: Record<string, unknown>): MateAction | null {
       return typeof a.text === 'string' && a.text.length <= MATE_COPY_MAX ? { t: 'copy', text: a.text } : null;
     case 'reply':
       return words(a.text) ? { t: 'reply', text: a.text } : null;
+    case 'preset':
+      return isCodexPromptId(a.id) ? { t: 'preset', id: a.id } : null;
     case 'ask':
       return words(a.text) && typeof a.newThread === 'boolean'
         ? { t: 'ask', text: a.text, newThread: a.newThread }

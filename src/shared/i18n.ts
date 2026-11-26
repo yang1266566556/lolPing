@@ -47,6 +47,29 @@ const enMateUi = {
   openCodex: 'Open in Codex',
   /** The desktop app or its link handler isn't there. */
   desktopMissing: 'Couldn’t open Codex desktop. Install the ChatGPT app from the Microsoft Store, turn on Codex, then try again.',
+  /** Short label on the chip; the body is what Codex's composer is filled with. Ids are stable, not the label. */
+  prompts: {
+    page: {
+      label: 'What’s on this page',
+      body: 'Look at the screenshots and the spot I marked. Using the window title, the page text, and anything I selected, explain in a few sentences what this is and where the key information is. Ask if something is unclear. Do not invent anything that is not on the screen.',
+    },
+    debug: {
+      label: 'Debug this',
+      body: 'From the errors, logs, or warnings on the screen, name the most likely cause and the next step to check or fix it. Start from the spot I marked and any selected text. Do not invent errors that are not shown.',
+    },
+    explain: {
+      label: 'Explain this',
+      body: 'Explain only the text I selected; if nothing is selected, explain the text near the signal. Say what it means and why it is written that way, with a short example if needed. Do not turn it into a tutorial.',
+    },
+    clearer: {
+      label: 'Make this clearer',
+      body: 'Rewrite the selected text so it is clearer and smoother, keeping the original meaning. Give the rewritten text first, then one or two sentences on what you changed.',
+    },
+    asked: {
+      label: 'Do what I asked',
+      body: 'Using this page, the working folder, and what I just said with the signal, do only the thing I asked. If something is missing, ask one question first. Do not widen the task.',
+    },
+  },
   newThread: 'New thread',
   historyTitle: 'Teammate history',
   search: 'Search',
@@ -1160,6 +1183,28 @@ const zh: Strings = {
       onIt: '出发了。',
       openCodex: '在 Codex 中打开',
       desktopMissing: '没能打开 Codex 桌面版。请从 Microsoft Store 安装 ChatGPT 应用，打开 Codex，然后再试一次。',
+      prompts: {
+        page: {
+          label: '看懂这一页',
+          body: '先看截图和我点的位置，结合窗口标题、页面文字和我选中的内容，用几句话说明这是什么、关键信息在哪。有不清楚的再问我，不要编造屏幕上没有的东西。',
+        },
+        debug: {
+          label: '排查问题',
+          body: '根据屏幕上的报错、日志或异常提示，判断最可能的原因，并给出下一步该怎么查或怎么改。先看我圈到的位置和选中的文字，不要编造没出现的报错。',
+        },
+        explain: {
+          label: '解释这段',
+          body: '只解释我选中的文字；如果没有选中，就解释信号附近的那段。讲清它在说什么、为什么这样写，必要时举一个短例子，不要展开成教程。',
+        },
+        clearer: {
+          label: '改得更好',
+          body: '在尽量保持原意的前提下，改写我选中的文字，让它更清楚、更顺。直接给出改好的文本，再用一两句说明改了什么。',
+        },
+        asked: {
+          label: '按我说的做',
+          body: '结合眼前的页面、工作目录，以及我刚用信号说的话，完成我提出的那件事。只做我说的范围，缺信息就先问一句，不要自行扩大任务。',
+        },
+      },
       newThread: '新对话',
       historyTitle: '队友历史',
       search: '搜索',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  absoluteFolder, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isClearRequest, isCodexDesktopUrl,
+  absoluteFolder, CODEX_PROMPT_IDS, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isClearRequest,
+  isCodexDesktopUrl, waitingPrompts,
 } from '../../../src/shared/teammate/dispatch';
 import { normalizeTeammate, type AgentProfile } from '../../../src/shared/teammate/settings';
 import { strings } from '../../../src/shared/i18n';
@@ -88,6 +89,67 @@ describe('codexDesktopPrompt', () => {
     expect(prompt).not.toContain('answer only');
     expect(prompt.toLowerCase()).not.toContain('fix the bug');
     expect(prompt).not.toContain('This is a task to do');
+  });
+
+  it('puts a chosen prompt first, then the page, and keeps the short label in the conversation', () => {
+    const prompts = strings('en').teammate.ui.prompts;
+    const withChip = codexDesktopPrompt({
+      ...scene,
+      instruction: prompts.page.body,
+      conversation: [
+        { who: 'user', ping: 'generic', text: 'Look here' },
+        { who: 'teammate', ping: 'generic', text: 'I see it. What do you need?' },
+        { who: 'user', ping: 'generic', text: prompts.page.label },
+      ],
+    });
+    expect(withChip.startsWith(prompts.page.body)).toBe(true);
+    expect(withChip.indexOf(prompts.page.body)).toBeLessThan(withChip.indexOf(OVERVIEW));
+    expect(withChip).toContain(ZOOM);
+    expect(withChip).toContain(RECORD);
+    expect(withChip).toContain(`User (generic): ${prompts.page.label}`);
+    expect(withChip).not.toContain('Look at this signal. Do not invent a task.');
+    expect(withChip.toLowerCase()).not.toContain('fix the bug');
+  });
+});
+
+describe('waiting prompts', () => {
+  it('offers the five ids only while Codex is waiting, in both languages', () => {
+    expect(waitingPrompts(true)).toEqual([...CODEX_PROMPT_IDS]);
+    expect(waitingPrompts(false)).toBeNull();
+    const en = strings('en').teammate.ui.prompts;
+    const zh = strings('zh-CN').teammate.ui.prompts;
+    expect(en.page.label).toBe('What’s on this page');
+    expect(en.page.body.startsWith('Look at the screenshots and the spot I marked.')).toBe(true);
+    expect(en.debug.label).toBe('Debug this');
+    expect(en.debug.body).toContain('Do not invent errors that are not shown.');
+    expect(en.explain.label).toBe('Explain this');
+    expect(en.explain.body).toContain('Do not turn it into a tutorial.');
+    expect(en.clearer.label).toBe('Make this clearer');
+    expect(en.clearer.body).toContain('Give the rewritten text first');
+    expect(en.asked.label).toBe('Do what I asked');
+    expect(en.asked.body).toContain('ask one question first');
+    expect(zh.page.label).toBe('看懂这一页');
+    expect(zh.page.body).toContain('不要编造屏幕上没有的东西。');
+    expect(zh.debug.label).toBe('排查问题');
+    expect(zh.debug.body).toContain('不要编造没出现的报错。');
+    expect(zh.explain.label).toBe('解释这段');
+    expect(zh.explain.body).toContain('不要展开成教程。');
+    expect(zh.clearer.label).toBe('改得更好');
+    expect(zh.clearer.body).toContain('直接给出改好的文本');
+    expect(zh.asked.label).toBe('按我说的做');
+    expect(zh.asked.body).toContain('先问一句');
+    for (const id of CODEX_PROMPT_IDS) {
+      expect(en[id].label).not.toBe(en[id].body);
+      expect(zh[id].label).not.toBe(zh[id].body);
+    }
+  });
+
+  it('opens Codex for a chip or a typed reply, and not for the question itself', () => {
+    expect(desktopPings({ words: null, replying: false }).open).toBe(false);
+    expect(desktopPings({ words: strings('en').teammate.ui.prompts.page.label, replying: true })).toEqual({
+      open: true, pings: [{ id: 'omw', line: 'onIt' }],
+    });
+    expect(desktopPings({ words: 'look at the null check', replying: true }).open).toBe(true);
   });
 });
 
