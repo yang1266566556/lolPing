@@ -125,7 +125,9 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
         <>
           {s.openFailed !== undefined && (
             <Text className={st.error} role="status">
-              {s.openFailed === 'codex-desktop' ? ui.desktopMissing : ui.openInFailed(s.openFailed)}
+              {s.openFailed === 'codex-desktop' ? ui.desktopMissing
+                : s.openFailed === 'chatgpt' ? ui.webMissing
+                  : ui.openInFailed(s.openFailed)}
             </Text>
           )}
           <SearchBox
@@ -175,8 +177,10 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
                         .join(' · ')}
                     </Caption1>
                   </div>
-                  {th.codex === true && (
-                    <Button size="small" onClick={() => act({ t: 'openCodex', id: th.id })}>{ui.openCodex}</Button>
+                  {(th.link !== undefined || th.codex === true) && (
+                    <Button size="small" onClick={() => act({ t: 'openCodex', id: th.id })}>
+                      {th.link === 'chatgpt' ? ui.openChatgpt : ui.openCodex}
+                    </Button>
                   )}
                   <Button size="small" onClick={() => act({ t: 'open', id: th.id })}>{ui.open}</Button>
                   <Button size="small" appearance="primary" onClick={() => act({ t: 'continue', id: th.id })}>

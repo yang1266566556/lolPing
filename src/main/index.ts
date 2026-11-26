@@ -25,7 +25,7 @@ import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
 import { openInRows, resumableProfile, resumeArgs } from '../shared/teammate/agentProfiles';
-import { isCodexDesktopUrl } from '../shared/teammate/dispatch';
+import { isChatgptUrl, isDispatchUrl } from '../shared/teammate/dispatch';
 import { wordsContinuesByDefault } from '../shared/teammate/threads';
 import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
@@ -818,9 +818,9 @@ function start(): void {
       case 'openCodex': {
         const record = await m.history.get(a.id);
         const url = record?.codex?.url;
-        if (url && isCodexDesktopUrl(url)) {
+        if (url && isDispatchUrl(url)) {
           const opened = await shell.openExternal(url).then(() => true, () => false);
-          if (!opened) historyOpenFailed = 'codex-desktop';
+          if (!opened) historyOpenFailed = isChatgptUrl(url) ? 'chatgpt' : 'codex-desktop';
         }
         return refreshHistory(m);
       }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isPingId, type PingId } from '../../shared/pings';
+import { isChatgptUrl, isDispatchUrl } from '../../shared/teammate/dispatch';
 import { isSessionId, prune, spotCount, type ThreadRecord } from '../../shared/teammate/history';
 import { renameWithRetry } from '../settingsStore';
 import type { Crypto } from './secrets';
@@ -17,8 +18,10 @@ export interface ThreadSummary {
   intents: PingId[];
   /** The agent profile whose session the thread continues, for the History window's Open in button. */
   agent?: string;
-  /** History can open the Codex desktop link for this signal again. */
+  /** History can open this signal's link again. */
   codex?: boolean;
+  /** Which link that button reopens. */
+  link?: 'codex' | 'chatgpt';
 }
 
 export interface HistoryOptions {
@@ -52,13 +55,17 @@ function parseEntry(raw: unknown): Entry | null {
   return Array.isArray(x.done) ? { ...e, done: x.done as string[] } : e;
 }
 
-/** A link this app stored. A malformed one is dropped; the thread itself still loads. */
+/** A link this app stored. A random https URL is dropped; the thread itself still loads. */
 function parseCodex(raw: unknown): NonNullable<ThreadRecord['codex']> | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const c = raw as Record<string, unknown>;
-  if (!isString(c.url) || !c.url.startsWith('codex://threads/new?') || c.url.length > 20_000) return null;
+  if (!isString(c.url) || !isDispatchUrl(c.url)) return null;
   if (!isString(c.dirId) || !ID_RE.test(c.dirId)) return null;
   return { url: c.url, dirId: c.dirId };
+}
+
+function linkOf(url: string): 'codex' | 'chatgpt' {
+  return isChatgptUrl(url) ? 'chatgpt' : 'codex';
 }
 
 /** Threads written before agents have none; a malformed one is dropped, as the session can't be resumed. */
@@ -116,7 +123,7 @@ const rowOf = (t: ThreadRecord): IndexRow => ({
   app: t.app,
   intents: t.entries.map((e) => e.intent),
   ...(t.agent ? { agent: t.agent.profileId } : {}),
-  ...(t.codex ? { codex: true } : {}),
+  ...(t.codex ? { codex: true, link: linkOf(t.codex.url) } : {}),
   searchText: [t.title, ...t.entries.flatMap((e) => [e.line, e.words ?? ''])].join(' ').toLowerCase(),
 });
 
@@ -179,13 +186,17 @@ export class HistoryStore {
       const writable = this.writable();
       const existing = writable && threadId !== null ? await this.read(threadId) : null;
       const at = this.now();
+      const codex = meta.codex && isDispatchUrl(meta.codex.url) ? meta.codex : undefined;
       const record: ThreadRecord = existing
         ? {
             ...existing, lastActivity: at, entries: [...existing.entries, entry],
             ...(meta.agent ? { agent: meta.agent } : {}),
-            ...(meta.codex ? { codex: meta.codex } : {}),
+            ...(codex ? { codex } : {}),
           }
-        : { id: randomUUID(), ...meta, started: at, lastActivity: at, entries: [entry] };
+        : {
+            id: randomUUID(), ...meta, ...(codex ? { codex } : { codex: undefined }),
+            started: at, lastActivity: at, entries: [entry],
+          };
       if (!writable) return record;
       await this.write(record);
       this.index.set(record.id, rowOf(record));

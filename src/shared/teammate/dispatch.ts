@@ -43,7 +43,7 @@ export function isCodexPromptId(v: unknown): v is CodexPromptId {
   return typeof v === 'string' && (CODEX_PROMPT_IDS as readonly string[]).includes(v);
 }
 
-/** The chips on the record card. Only while Codex desktop is waiting for a reply. */
+/** The chips on the record card. Only while On My Way is waiting for a reply that will open Codex. */
 export function waitingPrompts(waiting: boolean): readonly CodexPromptId[] | null {
   return waiting ? CODEX_PROMPT_IDS : null;
 }
@@ -72,9 +72,40 @@ export function isClearRequest(words: string | null | undefined): boolean {
   return [...t].length >= 4;
 }
 
+/** Where a signal goes while Open in Codex desktop is on. `ask` waits on the card; chips are only for Codex. */
+export type SignalRoute =
+  | { to: 'codex'; reply: boolean }
+  | { to: 'chatgpt'; reply: boolean }
+  | { to: 'save' }
+  | { to: 'ask'; for: 'codex' | 'chatgpt' };
+
 /**
- * Ping first. Open Codex desktop only after the user replies, or when the first signal already carried a clear request.
- * A clear request is acknowledged, then On My Way as the app opens. A reply is On My Way only: they were already asked.
+ * On My Way opens Codex. Bait is saved locally. Generic waits until the words are a real question, then opens ChatGPT.
+ * Every other signal already names its task, so it opens ChatGPT at once. A reply keeps the wait it is answering.
+ */
+export function signalRoute(input: {
+  ping: PingId;
+  words: string | null;
+  /** The wait this ask continues, when it is on that same thread. */
+  waiting: 'codex' | 'chatgpt' | null;
+}): SignalRoute {
+  if (input.waiting === 'codex') return { to: 'codex', reply: true };
+  if (input.waiting === 'chatgpt' && input.ping === 'generic') {
+    return isClearRequest(input.words) ? { to: 'chatgpt', reply: true } : { to: 'ask', for: 'chatgpt' };
+  }
+  if (input.ping === 'omw') {
+    return isClearRequest(input.words) ? { to: 'codex', reply: false } : { to: 'ask', for: 'codex' };
+  }
+  if (input.ping === 'bait') return { to: 'save' };
+  if (input.ping === 'generic') {
+    return isClearRequest(input.words) ? { to: 'chatgpt', reply: false } : { to: 'ask', for: 'chatgpt' };
+  }
+  return { to: 'chatgpt', reply: false };
+}
+
+/**
+ * Ping first, on the Codex path only. Open Codex desktop after the user replies, or when On My Way already carried a
+ * clear request. A clear request is acknowledged, then On My Way as the app opens. A reply is On My Way only.
  */
 export function desktopPings(input: { words: string | null; replying: boolean }): { open: boolean; pings: DesktopPing[] } {
   if (input.replying) return { open: true, pings: [{ id: 'omw', line: 'onIt' }] };
@@ -175,4 +206,156 @@ export function codexDesktopUrl(prompt: string, folder: string | null): string {
 /** A link this app built. Anything else is not opened. */
 export function isCodexDesktopUrl(url: string): boolean {
   return url.startsWith('codex://threads/new?prompt=') && url.length <= 20_000 && !/[\u0000-\u001f]/.test(url);
+}
+
+/** How long a chatgpt.com link may be. Readable text is cut first, then the selection, so the instruction stays. */
+export const CHATGPT_URL_MAX = 12_000;
+
+const CONTROL = /[\u0000-\u001f]/;
+
+const stripControls = (s: string): string => s.replace(/[\u0000-\u001f]/g, '');
+
+/** What ChatGPT's composer is filled with. The page is text, because the website cannot read a local file. */
+export interface WebContext {
+  /** The signal's task: the user's override, or the built-in instruction for this language. */
+  instruction: string;
+  /** Words typed with the signal or in the reply box. Left out when there are none. */
+  words: string | null;
+  /** They are on the website, and cannot ping or edit the screen. */
+  framing: string;
+  app: string;
+  title: string;
+  selection: string;
+  /** Readable text at the spot. */
+  text: string;
+  conversation: readonly PingLine[];
+  /** The thread so far. Push includes it; other signals pass an empty list. */
+  earlier: readonly PingLine[];
+}
+
+const clipField = (s: string): string => stripControls(s).trim();
+
+function turnLine(turn: PingLine): string {
+  const who = turn.who === 'user' ? 'User' : 'Teammate';
+  return `- ${who} (${turn.ping}): ${stripControls(turn.text).replace(/\s+/g, ' ').trim()}`;
+}
+
+function webLines(input: WebContext): string[] {
+  const lines: string[] = [];
+  const add = (label: string, value: string): void => {
+    const t = clipField(value);
+    if (t) lines.push(`${label}: ${t}`);
+  };
+  add('App', input.app);
+  add('Window title', input.title);
+  add('Selected text', input.selection);
+  add('Readable text', input.text);
+  if (input.earlier.length > 0) {
+    lines.push('', 'Earlier conversation:');
+    for (const turn of input.earlier) lines.push(turnLine(turn));
+  }
+  if (input.conversation.length > 0) {
+    lines.push('', 'Ping conversation:');
+    for (const turn of input.conversation) lines.push(turnLine(turn));
+  }
+  return lines;
+}
+
+/** Instruction, then the user's words, then the framing, then the page. Empty fields are left out. */
+export function chatgptPrompt(input: WebContext): string {
+  const instruction = clipField(input.instruction);
+  const words = input.words === null ? '' : clipField(input.words);
+  const parts = [instruction];
+  if (words) parts.push(words);
+  const framing = clipField(input.framing);
+  if (framing) parts.push(framing);
+  const context = webLines(input);
+  if (context.length > 0) parts.push(context.join('\n'));
+  return parts.filter((p) => p !== '').join('\n\n');
+}
+
+/** `https://chatgpt.com/?q=...`, with `hints=search` only for Need Vision. The composer is filled in, not sent. */
+export function chatgptUrl(prompt: string, search: boolean): string {
+  const q = encodeURIComponent(stripControls(prompt));
+  return search ? `https://chatgpt.com/?hints=search&q=${q}` : `https://chatgpt.com/?q=${q}`;
+}
+
+/**
+ * The link for this page. Readable text is shortened first, then the selection, until the URL fits.
+ * The instruction is never removed.
+ */
+export function chatgptLink(input: WebContext & { search: boolean }): { prompt: string; url: string } {
+  let selection = input.selection;
+  let text = input.text;
+  const build = (): { prompt: string; url: string } => {
+    const prompt = chatgptPrompt({ ...input, selection, text });
+    return { prompt, url: chatgptUrl(prompt, input.search) };
+  };
+  let link = build();
+  const shorten = (s: string): string => {
+    const chars = [...s];
+    if (chars.length <= 80) return '';
+    return `${chars.slice(0, Math.ceil(chars.length * 0.6)).join('')}…`;
+  };
+  let guard = 0;
+  while (link.url.length > CHATGPT_URL_MAX && text !== '' && guard < 40) {
+    text = shorten(text);
+    link = build();
+    guard += 1;
+  }
+  while (link.url.length > CHATGPT_URL_MAX && selection !== '' && guard < 80) {
+    selection = shorten(selection);
+    link = build();
+    guard += 1;
+  }
+  return link;
+}
+
+/** A chatgpt.com link this app built: only `q`, and `hints=search` when that was the task. */
+export function isChatgptUrl(url: string): boolean {
+  if (url.length > CHATGPT_URL_MAX || CONTROL.test(url)) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'chatgpt.com') return false;
+  if (parsed.pathname !== '/' && parsed.pathname !== '') return false;
+  if (parsed.username !== '' || parsed.password !== '' || parsed.hash !== '') return false;
+  const q = parsed.searchParams.get('q');
+  if (q === null || q.trim() === '') return false;
+  const keys = [...parsed.searchParams.keys()];
+  const hints = parsed.searchParams.get('hints');
+  if (hints === null) return keys.length === 1 && keys[0] === 'q';
+  return hints === 'search' && keys.length === 2 && keys.includes('q') && keys.includes('hints');
+}
+
+/** A Codex desktop link or a ChatGPT website link this app built. A random https URL is not. */
+export function isDispatchUrl(url: string): boolean {
+  return isCodexDesktopUrl(url) || isChatgptUrl(url);
+}
+
+const SAVED_TITLE_MAX = 80;
+const SAVED_SUMMARY_MAX = 280;
+
+function firstLine(s: string, max: number): string {
+  const raw = s.split(/\r?\n/).map((row) => stripControls(row).trim()).find((row) => row !== '') ?? '';
+  const chars = [...raw];
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max).join('')}…`;
+}
+
+/**
+ * A title for Save for later, with no model: the window title, or the start of the selected or readable text.
+ * Empty when none of those has text; the caller uses the signal's own label then.
+ */
+export function savedSpotTitle(input: { windowTitle: string; selection: string; text: string }): string {
+  return firstLine(input.windowTitle, SAVED_TITLE_MAX)
+    || firstLine(input.selection, SAVED_TITLE_MAX)
+    || firstLine(input.text, SAVED_TITLE_MAX);
+}
+
+/** A short summary of the spot: the selection, or the readable text when nothing is selected. */
+export function savedSpotSummary(selection: string, text: string): string {
+  return firstLine(selection, SAVED_SUMMARY_MAX) || firstLine(text, SAVED_SUMMARY_MAX);
 }

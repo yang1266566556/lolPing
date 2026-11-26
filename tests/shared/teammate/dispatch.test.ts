@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  absoluteFolder, CODEX_PROMPT_IDS, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isClearRequest,
-  isCodexDesktopUrl, waitingPrompts,
+  absoluteFolder, CHATGPT_URL_MAX, chatgptLink, chatgptPrompt, chatgptUrl, CODEX_PROMPT_IDS, codexDesktopPrompt,
+  codexDesktopUrl, desktopPings, dispatchProfile, isChatgptUrl, isClearRequest, isCodexDesktopUrl, isDispatchUrl,
+  savedSpotSummary, savedSpotTitle, signalRoute, waitingPrompts,
 } from '../../../src/shared/teammate/dispatch';
+import type { PingId } from '../../../src/shared/pings';
 import { normalizeTeammate, type AgentProfile } from '../../../src/shared/teammate/settings';
 import { strings } from '../../../src/shared/i18n';
 
@@ -46,6 +48,41 @@ describe('isClearRequest', () => {
   it('treats two words, or one longer phrase, as a request the user already made', () => {
     expect(isClearRequest('fix it')).toBe(true);
     expect(isClearRequest('修一下空指针')).toBe(true);
+  });
+});
+
+describe('signalRoute', () => {
+  const web: PingId[] = [
+    'danger', 'push', 'allin', 'assist', 'needvision', 'missing', 'enemyvision', 'visioncleared', 'missingflip',
+  ];
+
+  it('sends On My Way to Codex, Bait to history, and the other signals to ChatGPT', () => {
+    expect(signalRoute({ ping: 'omw', words: null, waiting: null })).toEqual({ to: 'ask', for: 'codex' });
+    expect(signalRoute({ ping: 'omw', words: 'fix the null check', waiting: null })).toEqual({
+      to: 'codex', reply: false,
+    });
+    expect(signalRoute({ ping: 'omw', words: 'hi', waiting: 'codex' })).toEqual({ to: 'codex', reply: true });
+    expect(signalRoute({ ping: 'bait', words: null, waiting: null })).toEqual({ to: 'save' });
+    expect(signalRoute({ ping: 'generic', words: null, waiting: null })).toEqual({ to: 'ask', for: 'chatgpt' });
+    expect(signalRoute({ ping: 'generic', words: 'hi', waiting: 'chatgpt' })).toEqual({ to: 'ask', for: 'chatgpt' });
+    expect(signalRoute({ ping: 'generic', words: 'what does this mean', waiting: null })).toEqual({
+      to: 'chatgpt', reply: false,
+    });
+    expect(signalRoute({ ping: 'generic', words: 'what does this mean', waiting: 'chatgpt' })).toEqual({
+      to: 'chatgpt', reply: true,
+    });
+    for (const ping of web) {
+      expect(signalRoute({ ping, words: null, waiting: null })).toEqual({ to: 'chatgpt', reply: false });
+    }
+  });
+
+  it('keeps the Codex chips off while a Generic question is still waiting', () => {
+    const generic = signalRoute({ ping: 'generic', words: null, waiting: null });
+    const omw = signalRoute({ ping: 'omw', words: null, waiting: null });
+    expect(generic).toEqual({ to: 'ask', for: 'chatgpt' });
+    expect(omw).toEqual({ to: 'ask', for: 'codex' });
+    expect(waitingPrompts(generic.to === 'ask' && generic.for === 'codex')).toBeNull();
+    expect(waitingPrompts(omw.to === 'ask' && omw.for === 'codex')).toEqual([...CODEX_PROMPT_IDS]);
   });
 });
 
@@ -150,6 +187,99 @@ describe('waiting prompts', () => {
       open: true, pings: [{ id: 'omw', line: 'onIt' }],
     });
     expect(desktopPings({ words: 'look at the null check', replying: true }).open).toBe(true);
+  });
+});
+
+describe('chatgptPrompt', () => {
+  const framing = strings('en').teammate.ui.webFraming;
+  const page = {
+    instruction: 'Explain what is at the spot.',
+    words: 'why is this null',
+    framing,
+    app: 'Code.exe',
+    title: 'app.ts - app',
+    selection: 'const x = null',
+    text: 'TypeError: x is null',
+    conversation: [{ who: 'user' as const, ping: 'missing' as const, text: 'Explain' }],
+    earlier: [] as { who: 'user' | 'teammate'; ping: PingId; text: string }[],
+  };
+
+  it('puts the instruction first, then the words, the framing, and the page as text', () => {
+    const prompt = chatgptPrompt(page);
+    expect(prompt.startsWith('Explain what is at the spot.')).toBe(true);
+    expect(prompt.indexOf('why is this null')).toBeGreaterThan(0);
+    expect(prompt.indexOf('why is this null')).toBeLessThan(prompt.indexOf(framing));
+    expect(prompt.indexOf(framing)).toBeLessThan(prompt.indexOf('Selected text: const x = null'));
+    expect(prompt).toContain('App: Code.exe');
+    expect(prompt).toContain('Window title: app.ts - app');
+    expect(prompt).toContain('Readable text: TypeError: x is null');
+    expect(prompt).toContain('User (missing): Explain');
+    expect(prompt).not.toContain('signal.md');
+    expect(prompt).not.toContain('overview.jpg');
+    expect(prompt).not.toContain('codex-signals');
+  });
+
+  it('uses a custom instruction and leaves empty fields out', () => {
+    const custom = '把文字翻译为简体中文';
+    const prompt = chatgptPrompt({
+      ...page, instruction: custom, words: null, selection: '', text: '', earlier: [],
+    });
+    expect(prompt.startsWith(custom)).toBe(true);
+    expect(prompt).not.toContain('Explain what is at the spot.');
+    expect(prompt).not.toContain('Selected text:');
+    expect(prompt).not.toContain('Readable text:');
+    expect(prompt).not.toContain('Earlier conversation:');
+  });
+
+  it('includes the earlier thread only when Push passes one', () => {
+    const earlier = [{ who: 'user' as const, ping: 'generic' as const, text: 'start here' }];
+    expect(chatgptPrompt({ ...page, earlier })).toContain('Earlier conversation:');
+    expect(chatgptPrompt({ ...page, earlier })).toContain('User (generic): start here');
+    expect(chatgptPrompt(page)).not.toContain('Earlier conversation:');
+  });
+});
+
+describe('chatgptUrl', () => {
+  it('encodes the prompt so an ampersand cannot cut it, and adds search only for Need Vision', () => {
+    const url = chatgptUrl('Find a & b', false);
+    expect(url).toBe(`https://chatgpt.com/?q=${encodeURIComponent('Find a & b')}`);
+    expect(isChatgptUrl(url)).toBe(true);
+    expect(new URL(url).searchParams.get('q')).toBe('Find a & b');
+    const search = chatgptUrl('Look up the term', true);
+    expect(search.startsWith('https://chatgpt.com/?hints=search&q=')).toBe(true);
+    expect(isChatgptUrl(search)).toBe(true);
+    expect(isChatgptUrl('https://example.com/?q=hi')).toBe(false);
+    expect(isChatgptUrl('https://chat.openai.com/?q=hi')).toBe(false);
+    expect(isChatgptUrl('https://chatgpt.com/g/abc?q=hi')).toBe(false);
+    expect(isChatgptUrl('https://chatgpt.com/?q=hi&temporary-chat=true')).toBe(false);
+    expect(isChatgptUrl('chatgpt://threads/new?prompt=hi')).toBe(false);
+    expect(isDispatchUrl(url)).toBe(true);
+    expect(isDispatchUrl('https://example.com/?q=hi')).toBe(false);
+  });
+
+  it('shortens readable text before the selection, and keeps the instruction', () => {
+    const instruction = 'Translate this paragraph.';
+    const selection = 'KEEP-SELECTION';
+    const link = chatgptLink({
+      instruction, words: null, framing: 'Stay on the page.',
+      app: 'Code.exe', title: 'app.ts', selection, text: 'T'.repeat(20_000),
+      conversation: [], earlier: [], search: false,
+    });
+    expect(link.url.length).toBeLessThanOrEqual(CHATGPT_URL_MAX);
+    expect(link.prompt.startsWith(instruction)).toBe(true);
+    expect(link.prompt).toContain(selection);
+    expect(link.prompt).not.toContain('T'.repeat(20_000));
+    expect(isChatgptUrl(link.url)).toBe(true);
+  });
+});
+
+describe('savedSpotTitle', () => {
+  it('uses the window title, then the selection, then the readable text', () => {
+    expect(savedSpotTitle({ windowTitle: 'notes.txt', selection: 'Hello', text: 'page' })).toBe('notes.txt');
+    expect(savedSpotTitle({ windowTitle: '  ', selection: 'Hello there', text: 'page' })).toBe('Hello there');
+    expect(savedSpotTitle({ windowTitle: '', selection: '', text: 'the first line\nmore' })).toBe('the first line');
+    expect(savedSpotSummary('Hello there', 'page')).toBe('Hello there');
+    expect(savedSpotSummary('', 'page text')).toBe('page text');
   });
 });
 

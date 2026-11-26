@@ -2076,7 +2076,7 @@ describe('AskController', () => {
       },
     };
     const h = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
-    h.ctl.ask([spot('generic')]);
+    h.ctl.ask([spot('omw')]);
     await flush();
     expect(opened).toEqual([]);
     expect(h.pings().map((p) => p.id)).toEqual(['generic']);
@@ -2117,7 +2117,7 @@ describe('AskController', () => {
       return decodeURIComponent(q);
     };
     const chip = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
-    chip.ctl.ask([spot('generic')]);
+    chip.ctl.ask([spot('omw')]);
     await flush();
     chip.ctl.onTeammateAction('card', { t: 'preset', id: 'page' });
     await flush();
@@ -2129,7 +2129,7 @@ describe('AskController', () => {
 
     opened.length = 0;
     const typed = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
-    typed.ctl.ask([spot('generic')]);
+    typed.ctl.ask([spot('omw')]);
     await flush();
     typed.ctl.onTeammateAction('card', { t: 'reply', text: 'look at the null check' });
     await flush();
@@ -2137,5 +2137,99 @@ describe('AskController', () => {
     expect(own.startsWith('Look at this signal. Do not invent a task.')).toBe(true);
     expect(own).toContain('look at the null check');
     expect(own).not.toContain(t.ui.prompts.page.body);
+  });
+
+  it('opens ChatGPT for a simple signal, and asks a Generic question without the Codex chips', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const webOf = (url: string): string => {
+      const parsed = new URL(url);
+      return parsed.searchParams.get('q') ?? '';
+    };
+    const screen = {
+      system: { selection: 'Hello there', spotTexts: ['a paragraph'], focus: null, address: '' },
+    };
+    const explain = harness({
+      teammate: {
+        profiles: [codex], defaultProfile: 'cx',
+        intents: { missingflip: { instruction: '把文字翻译为简体中文' } },
+      },
+      agents, screen,
+    });
+    explain.ctl.ask([spot('missing')]);
+    await flush();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?q=/);
+    expect(opened[0]).not.toContain('hints=search');
+    const explained = webOf(opened[0] ?? '');
+    expect(explained.startsWith(t.intent.missing.instruction)).toBe(true);
+    expect(explained).toContain('Hello there');
+    expect(explained).toContain('notepad.exe');
+    expect(explained).not.toContain('signal.md');
+    expect(explained).not.toContain('overview.jpg');
+    expect(explain.cards().at(-1)?.follow).toBe('chatgpt');
+    expect(explain.cards().at(-1)?.prompts).toBeUndefined();
+    expect(explain.adapters).toEqual([]);
+
+    opened.length = 0;
+    const translated = harness({
+      teammate: {
+        profiles: [codex], defaultProfile: 'cx',
+        intents: { missingflip: { instruction: '把文字翻译为简体中文' } },
+      },
+      agents, screen,
+    });
+    translated.ctl.ask([spot('missingflip')]);
+    await flush();
+    expect(webOf(opened[0] ?? '').startsWith('把文字翻译为简体中文')).toBe(true);
+    expect(webOf(opened[0] ?? '')).not.toContain(t.intent.missingflip.instruction);
+
+    opened.length = 0;
+    const lookup = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    lookup.ctl.ask([spot('needvision')]);
+    await flush();
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?hints=search&q=/);
+
+    opened.length = 0;
+    const asking = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    asking.ctl.ask([spot('generic')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(asking.cards().at(-1)?.prompts).toBeUndefined();
+    expect(asking.cards().at(-1)?.follow).toBeUndefined();
+    expect(asking.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.askQuestion);
+    asking.ctl.onTeammateAction('card', { t: 'reply', text: 'what does this paragraph mean' });
+    await flush();
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?q=/);
+    expect(webOf(opened[0] ?? '')).toContain('what does this paragraph mean');
+    expect(webOf(opened[0] ?? '')).not.toContain('signal.md');
+    expect(asking.cards().at(-1)?.prompts).toBeUndefined();
+    expect(asking.cards().at(-1)?.follow).toBe('chatgpt');
+
+    opened.length = 0;
+    const later = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    later.ctl.ask([spot('bait')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(later.adapters).toEqual([]);
+    expect(later.cards().at(-1)?.follow).toBeUndefined();
+    expect(later.cards().at(-1)?.title).toBe('notes.txt');
+    expect(later.appends.at(-1)?.line).toBe(t.ui.savedSpot);
+    expect(later.appends.at(-1)?.markdown).toContain('Hello there');
+    expect(later.appends.at(-1)?.markdown).toContain('notepad.exe');
   });
 });

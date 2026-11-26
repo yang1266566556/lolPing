@@ -45,8 +45,23 @@ const enMateUi = {
   onIt: 'On my way.',
   /** Opens the saved codex:// link again. */
   openCodex: 'Open in Codex',
+  /** Opens the saved chatgpt.com link again. */
+  openChatgpt: 'Open in ChatGPT',
   /** The desktop app or its link handler isn't there. */
   desktopMissing: 'Couldn’t open Codex desktop. Install the ChatGPT app from the Microsoft Store, turn on Codex, then try again.',
+  /** The browser did not open the page. */
+  webMissing: 'Couldn’t open ChatGPT.',
+  /** ChatGPT's website is open. The user still presses Enter. */
+  openedWeb: 'Opened in ChatGPT. Press Enter once there.',
+  /** Generic had no question yet. The five Codex prompts are not part of this wait. */
+  askQuestion: 'What do you want to ask?',
+  /** Bait: the spot is in history. No model was asked. */
+  savedSpot: 'Saved for later.',
+  savedTitleLabel: 'Title',
+  savedSummaryLabel: 'Summary',
+  savedFromLabel: 'From',
+  /** Sits after the task, before the page. ChatGPT cannot ping or edit the screen. */
+  webFraming: 'You are on the ChatGPT website. You cannot place lolPing pings or edit the screen. Put any rewritten, extracted, or translated text in a copyable block. Do not invent text that is not in the context.',
   /** Short label on the chip; the body is what Codex's composer is filled with. Ids are stable, not the label. */
   prompts: {
     page: {
@@ -324,7 +339,7 @@ const enMateSettings = {
   agentTimeout: 'Time limit',
   agentTimeoutUnit: 'minutes',
   dispatchTitle: 'Open in Codex desktop',
-  dispatchDesc: 'After you signal, the teammate pings back and asks what you need. Then Codex desktop opens with the screen, the crop, and that conversation. You press Enter once in Codex. Off until you turn it on. The project folder above is where Codex works.',
+  dispatchDesc: 'Do it opens Codex desktop, and asks what you need first when you have not said. Save for later is kept in history on this computer. The other signals open chatgpt.com with that signal’s task. You press Enter once. Off until you turn it on.',
   dispatchFolder: 'Working folder',
   dispatchFolderDesc: 'The project folder above. Codex opens there.',
   agentArgs: 'Arguments',
@@ -1182,7 +1197,16 @@ const zh: Strings = {
       gotIt: '收到。',
       onIt: '出发了。',
       openCodex: '在 Codex 中打开',
+      openChatgpt: '在 ChatGPT 中打开',
       desktopMissing: '没能打开 Codex 桌面版。请从 Microsoft Store 安装 ChatGPT 应用，打开 Codex，然后再试一次。',
+      webMissing: '没能打开 ChatGPT。',
+      openedWeb: '已在 ChatGPT 中打开。你在网页里按一次回车。',
+      askQuestion: '你想问什么？',
+      savedSpot: '已存入历史。',
+      savedTitleLabel: '标题',
+      savedSummaryLabel: '摘要',
+      savedFromLabel: '来源',
+      webFraming: '你在 ChatGPT 网页里。你不能放 lolPing 信号，也不能改屏幕上的内容。把改写、提取或翻译的文字放进可以复制的代码块。不要编造上下文里没有的文字。',
       prompts: {
         page: {
           label: '看懂这一页',
@@ -1385,7 +1409,7 @@ const zh: Strings = {
       agentTimeout: '时间限制',
       agentTimeoutUnit: '分钟',
       dispatchTitle: '在 Codex 桌面版中打开',
-      dispatchDesc: '你发出信号后，队友先回一个信号，问你要做什么。然后 Codex 桌面版打开，带上屏幕、放大图和这段对打。你在 Codex 里按一次回车。默认关闭。上面的项目文件夹就是工作位置。',
+      dispatchDesc: '帮我做会打开 Codex 桌面版；你还没说要做什么时，会先问一句。稍后看记在这台电脑的历史里。其他信号按该信号的任务打开 chatgpt.com。你在那边按一次回车。默认关闭。',
       dispatchFolder: '工作文件夹',
       dispatchFolderDesc: '就是上面的项目文件夹。Codex 在那里打开。',
       agentArgs: '参数',

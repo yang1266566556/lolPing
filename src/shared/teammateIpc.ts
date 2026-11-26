@@ -40,8 +40,8 @@ export interface BubbleState {
   /** There is more than the line: the More button is shown. */
   more: boolean;
   put: PutState;
-  /** Opens the saved Codex desktop link again. */
-  follow?: 'codex';
+  /** Opens the saved Codex desktop or ChatGPT website link again. */
+  follow?: 'codex' | 'chatgpt';
 }
 
 export interface CardState {
@@ -56,9 +56,9 @@ export interface CardState {
   put: PutState;
   /** An agent's unprompted answer: no reply box and no Whole picture, which would ask the user's own teammate. */
   answerOnly?: boolean;
-  /** Opens the saved Codex desktop link again. */
-  follow?: 'codex';
-  /** Set only while Codex desktop is waiting for a reply. The ids, not the labels. */
+  /** Opens the saved Codex desktop or ChatGPT website link again. */
+  follow?: 'codex' | 'chatgpt';
+  /** Set only while On My Way is waiting for a reply that opens Codex. Not while Generic is waiting for a question. */
   prompts?: readonly CodexPromptId[];
 }
 
@@ -71,8 +71,10 @@ export interface HistoryThread {
   intents: PingId[];
   /** The agent profile's name when the thread's session can be opened in a terminal; the button reads "Open in" it. */
   agent?: string;
-  /** The signal was handed to Codex desktop: History can open that link again. */
+  /** The signal was handed off: History can open that link again. */
   codex?: boolean;
+  /** Which link the Open button reopens. Absent on a thread that was only saved. */
+  link?: 'codex' | 'chatgpt';
 }
 
 export interface HistoryState {
@@ -154,7 +156,7 @@ export type MateAction =
   | { t: 'history' }
   | { t: 'link'; url: string }
   | { t: 'ask'; text: string; newThread: boolean }
-  /** The bubble or card button: open the saved Codex desktop link again. */
+  /** The bubble or card button: open the saved Codex or ChatGPT link again. */
   | { t: 'follow' }
   | { t: 'cancel' }
   | { t: 'open'; id: string }

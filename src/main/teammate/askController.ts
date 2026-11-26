@@ -9,7 +9,8 @@ import { sanitizeName } from '../../shared/roomProtocol';
 import type { Settings } from '../../shared/settings';
 import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
 import {
-  absoluteFolder, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isCodexDesktopUrl,
+  absoluteFolder, chatgptLink, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile,
+  isChatgptUrl, isDispatchUrl, savedSpotSummary, savedSpotTitle, signalRoute,
   waitingPrompts, type CodexPromptId, type PingLine,
 } from '../../shared/teammate/dispatch';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
@@ -235,12 +236,14 @@ interface Run {
   bubbleBack: boolean;
   /** Dispatch leaves the ask folder: Codex reads task.md after the ask has ended. */
   keepDir: boolean;
-  /** The bubble and card button that opens the Codex desktop link again. */
-  follow: 'codex' | null;
+  /** The bubble and card button that opens the saved link again. */
+  follow: 'codex' | 'chatgpt' | null;
   /** The link and the screenshot folder, stored with the thread. */
   codexLink: { url: string; dirId: string } | null;
-  /** Chips on the card. Only the ask that is still waiting for a reply has them. */
+  /** Chips on the card. Only On My Way, while it is still waiting, has them. */
   prompts: readonly CodexPromptId[] | null;
+  /** Save for later's title, taken from the window or the text. The history row uses it. */
+  recordTitle: string | null;
 }
 
 /** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
@@ -421,8 +424,9 @@ export class AskController extends EventEmitter {
   private viewed: ThreadRecord | null = null;
   /** A chip tapped on the waiting card. The next desktop reply uses its instruction; a typed reply leaves this null. */
   private pendingPrompt: CodexPromptId | null = null;
-  /** A signal whose teammate already asked what the user needs. The next reply on that thread opens Codex. */
+  /** A signal that is waiting. Codex waits for On My Way; ChatGPT waits for a Generic question, with no chips. */
   private codexWait: {
+    kind: 'codex' | 'chatgpt';
     threadId: string;
     dirId: string;
     overviewPath: string;
@@ -513,7 +517,7 @@ export class AskController extends EventEmitter {
       calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, codexLink: null, prompts: null,
+      keepDir: false, follow: null, codexLink: null, prompts: null, recordTitle: null,
     };
     this.run = run;
     this.shown = run;
@@ -580,7 +584,9 @@ export class AskController extends EventEmitter {
       view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
       entries: this.threadEntries(record, lang, t.tagName), streaming: false,
       footer: { profile: record.profile, model: '', route: '', tokens: null, used: [] }, put: null,
-      ...(record.codex && isCodexDesktopUrl(record.codex.url) ? { follow: 'codex' as const } : {}),
+      ...(record.codex && isDispatchUrl(record.codex.url)
+        ? { follow: isChatgptUrl(record.codex.url) ? 'chatgpt' as const : 'codex' as const }
+        : {}),
     });
     this.cardShown = true;
     this.viewed = record;
@@ -623,7 +629,7 @@ export class AskController extends EventEmitter {
         break;
       case 'preset':
         // A chip is a reply on this signal. The short label is what the thread shows; the long instruction goes to Codex.
-        if (run && !run.visitor && this.codexWait && this.thread?.id === this.codexWait.threadId) {
+        if (run && !run.visitor && this.codexWait?.kind === 'codex' && this.thread?.id === this.codexWait.threadId) {
           this.pendingPrompt = a.id;
           const label = strings(run.lang).teammate.ui.prompts[a.id].label;
           this.ask([{ ...run.spot, intent: 'generic' }], { text: label, newThread: false });
@@ -827,7 +833,7 @@ export class AskController extends EventEmitter {
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
       box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, codexLink: null, prompts: null,
+      keepDir: false, follow: null, codexLink: null, prompts: null, recordTitle: null,
     };
   }
 
@@ -1013,16 +1019,16 @@ export class AskController extends EventEmitter {
     };
   }
 
-  /** Opens the saved Codex desktop link again. A failed handler says so. It never falls back to a terminal. */
+  /** Opens the saved Codex or ChatGPT link again. A failed handler says so. It never falls back to a terminal. */
   private async openCodexAgain(run: Run | null): Promise<void> {
     const saved = run?.codexLink?.url ?? this.viewed?.codex?.url ?? null;
     const open = this.deps.agents?.openDesktop;
-    if (!saved || !isCodexDesktopUrl(saved) || !open) return;
+    if (!saved || !isDispatchUrl(saved) || !open) return;
     const ok = await open(saved);
     if (ok || !run) return;
     const ui = strings(run.lang).teammate.ui;
-    run.line = ui.desktopMissing;
-    run.said = ui.desktopMissing;
+    run.line = isChatgptUrl(saved) ? ui.webMissing : ui.desktopMissing;
+    run.said = run.line;
     this.showLine(run, run.line);
     this.showRecord(run);
   }
@@ -1057,16 +1063,13 @@ export class AskController extends EventEmitter {
   }
 
   /**
-   * Copies the screenshots out of the ask's temp folder, which is deleted when the ask ends, and writes the record
-   * Codex is told to read.
+   * Copies the screenshots out of the ask's temp folder, which is deleted when the ask ends, and writes the local
+   * record. `note` is what was handed off, or the save itself. ChatGPT is not told to read this file.
    */
   private async saveSignal(
     run: Run,
     scene: { cap: { overviewPath: string; zooms: { path: string }[] } },
-    conversation: PingLine[],
-    folder: string,
-    selection: string,
-    text: string,
+    note: string,
   ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string } | null> {
     const dirId = run.machine.id;
     if (!/^[A-Za-z0-9-]{1,64}$/.test(dirId)) return null;
@@ -1085,38 +1088,44 @@ export class AskController extends EventEmitter {
       zoomPaths.push(to);
     }
     const recordPath = join(dir, 'signal.md');
-    await this.files.write(recordPath, codexDesktopPrompt({
-      overviewPath, zoomPaths, recordPath, app: run.app, title: run.title, selection, text, folder, conversation,
-    }));
+    await this.files.write(recordPath, note);
     return { dirId, overviewPath, zoomPaths, recordPath };
   }
 
-  /** A reply stays on the first signal's screenshots. The record file is rewritten with the longer conversation. */
+  /** A reply stays on the first signal's screenshots. The record file is rewritten with the new handoff. */
   private async rewriteSignal(
     held: NonNullable<AskController['codexWait']>,
-    conversation: PingLine[],
-    instruction?: string,
+    note: string,
   ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string }> {
-    await this.files.write(held.recordPath, codexDesktopPrompt({
-      overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
-      app: held.app, title: held.title, selection: held.selection, text: held.text, folder: held.folder,
-      conversation, ...(instruction ? { instruction } : {}),
-    }));
+    await this.files.write(held.recordPath, note);
     return {
       dirId: held.dirId, overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
     };
   }
 
+  /** The thread so far, for Push. Other signals do not send it. */
+  private earlierLines(run: Run): PingLine[] {
+    if (run.intent.def.id !== 'push' || !run.thread) return [];
+    const lines: PingLine[] = [];
+    for (const entry of run.thread.entries) {
+      if (entry.words) lines.push({ who: 'user', ping: entry.intent, text: entry.words });
+      if (entry.line) lines.push({ who: 'teammate', ping: entry.intent, text: entry.line });
+    }
+    return lines;
+  }
+
   /**
-   * The main ask, when Open in Codex desktop is on. The teammate pings back at the spot first. Codex desktop opens
-   * only after the user replies, or when this signal already said what they want. The link prefills the composer.
+   * The main ask, when Open in Codex desktop is on. On My Way still opens Codex desktop. Bait is saved here.
+   * The other signals open chatgpt.com. The in-app teammate is not used on this path.
    */
   private async desktopAsk(run: Run, reading: Reading): Promise<void> {
     const { agents } = this.deps;
     const words = strings(run.lang).teammate.ask;
     const ui = strings(run.lang).teammate.ui;
-    const replying = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
-    const chosen = replying ? this.pendingPrompt : null;
+    const same = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
+    const waiting = same && this.codexWait ? this.codexWait.kind : null;
+    const route = signalRoute({ ping: run.intent.def.id, words: run.words, waiting });
+    const chosen = route.to === 'codex' && route.reply ? this.pendingPrompt : null;
     this.pendingPrompt = null;
     const profile = dispatchProfile(this.deps.settings().teammate.profiles);
     for (const d of run.deadlines) clearTimeout(d);
@@ -1137,60 +1146,121 @@ export class AskController extends EventEmitter {
     const focusText = focus && !focus.secure && focus.value !== '' ? `${focus.label}: ${focus.value}` : '';
     const spotText = [focusText, ...(ctx.system?.spotTexts ?? [])].filter((s) => s.trim() !== '').join('\n');
     const selection = ctx.system?.selection ?? '';
-    const prior = replying && this.codexWait ? this.codexWait.conversation : [];
+    const reply = 'reply' in route && route.reply;
+    const held = reply && this.codexWait ? this.codexWait : null;
+    const page = {
+      app: held?.app ?? run.app,
+      title: held?.title ?? run.title,
+      selection: held?.selection ?? selection,
+      text: held?.text ?? spotText,
+      folder: held?.folder ?? folder.path,
+    };
     const userText = run.words?.trim() || run.intent.label;
-    const instruction = chosen ? strings(run.lang).teammate.ui.prompts[chosen].body : undefined;
-    const conversation: PingLine[] = [...prior, { who: 'user', ping: run.intent.def.id, text: userText }];
-    const step = desktopPings({ words: run.words, replying });
-    for (const ping of step.pings) conversation.push({ who: 'teammate', ping: ping.id, text: ui[ping.line] });
-
-    const held = replying ? this.codexWait : null;
-    const saved = held
-      ? await this.rewriteSignal(held, conversation, instruction)
-      : await this.saveSignal(run, scene, conversation, folder.path, selection, spotText);
-    if (!saved || !this.alive(run)) return;
-    const prompt = codexDesktopPrompt({
-      overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths, recordPath: saved.recordPath,
-      app: held?.app ?? run.app, title: held?.title ?? run.title,
-      selection: held?.selection ?? selection, text: held?.text ?? spotText,
-      folder: held?.folder ?? folder.path, conversation, ...(instruction ? { instruction } : {}),
-    });
-    const url = codexDesktopUrl(prompt, absoluteFolder(held?.folder ?? folder.path));
-    // The link is stored once Codex is actually opened, so History doesn't offer it while the teammate is still asking.
-    run.codexLink = step.open ? { url, dirId: saved.dirId } : null;
-    run.follow = step.open ? 'codex' : null;
-    run.prompts = waitingPrompts(!step.open);
-    const lastPing = step.pings[step.pings.length - 1];
-    if (!lastPing) return;
-    run.line = ui[lastPing.line];
-    run.said = run.line;
+    const conversation: PingLine[] = [
+      ...(held?.conversation ?? []),
+      { who: 'user', ping: run.intent.def.id, text: userText },
+    ];
     const names = strings(run.lang).pingNames;
-    run.markdown = [conversation.map((turn) => `${names[turn.ping]}: ${turn.text}`).join('\n')];
+
+    if (route.to === 'save') {
+      const title = savedSpotTitle({ windowTitle: page.title, selection: page.selection, text: page.text })
+        || run.intent.label;
+      const summary = savedSpotSummary(page.selection, page.text);
+      const from = [page.app, page.title].filter((s) => s.trim() !== '').join(ui.sep);
+      run.recordTitle = title;
+      run.line = ui.savedSpot;
+      run.said = ui.savedSpot;
+      run.prompts = null;
+      run.follow = null;
+      run.codexLink = null;
+      run.markdown = [[
+        `${ui.savedTitleLabel}${ui.labelSep}${title}`,
+        ...(summary ? [`${ui.savedSummaryLabel}${ui.labelSep}${summary}`] : []),
+        ...(from ? [`${ui.savedFromLabel}${ui.labelSep}${from}`] : []),
+      ].join('\n')];
+      const saved = await this.saveSignal(run, scene, run.markdown[0] ?? title);
+      if (!saved || !this.alive(run)) return;
+      run.machine.sent();
+      if (!run.machine.received()) return;
+      this.showRecord(run);
+      await this.finish(run);
+      if (this.codexWait?.threadId === this.thread?.id) this.codexWait = null;
+      return;
+    }
+
+    const codexStep = route.to === 'codex' || (route.to === 'ask' && route.for === 'codex')
+      ? desktopPings({ words: run.words, replying: route.to === 'codex' && route.reply })
+      : null;
+    if (codexStep) {
+      for (const ping of codexStep.pings) conversation.push({ who: 'teammate', ping: ping.id, text: ui[ping.line] });
+    } else if (route.to === 'ask') {
+      conversation.push({ who: 'teammate', ping: 'generic', text: ui.askQuestion });
+    }
+    const chip = chosen ? ui.prompts[chosen].body : undefined;
+    const openingCodex = codexStep?.open === true;
+    const openingWeb = route.to === 'chatgpt';
+    const web = chatgptLink({
+      instruction: run.intent.instruction,
+      words: run.words,
+      framing: ui.webFraming,
+      app: page.app, title: page.title, selection: page.selection, text: page.text,
+      conversation, earlier: this.earlierLines(run),
+      search: run.intent.def.id === 'needvision',
+    });
+    const saved = held
+      ? await this.rewriteSignal(held, web.prompt)
+      : await this.saveSignal(run, scene, web.prompt);
+    if (!saved || !this.alive(run)) return;
+    // Codex is told where the screenshots are. ChatGPT only gets the page as text, which is already in web.prompt.
+    const prompt = openingWeb ? web.prompt : codexDesktopPrompt({
+      overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths, recordPath: saved.recordPath,
+      app: page.app, title: page.title, selection: page.selection, text: page.text, folder: page.folder,
+      conversation, ...(chip ? { instruction: chip } : {}),
+    });
+    if (!openingWeb) await this.files.write(saved.recordPath, prompt);
+    const url = openingWeb ? web.url : codexDesktopUrl(prompt, absoluteFolder(page.folder));
+    const openNow = openingCodex || openingWeb;
+    run.codexLink = openNow ? { url, dirId: saved.dirId } : null;
+    run.follow = openingWeb ? 'chatgpt' : openingCodex ? 'codex' : null;
+    run.prompts = waitingPrompts(route.to === 'ask' && route.for === 'codex');
+    if (openingWeb) {
+      run.line = ui.openedWeb;
+      run.markdown = [run.intent.instruction, ...(run.words?.trim() ? [run.words.trim()] : [])];
+    } else if (codexStep) {
+      const lastPing = codexStep.pings[codexStep.pings.length - 1];
+      if (!lastPing) return;
+      run.line = ui[lastPing.line];
+      run.markdown = [conversation.map((turn) => `${names[turn.ping]}: ${turn.text}`).join('\n')];
+    } else {
+      run.line = ui.askQuestion;
+      run.markdown = [ui.askQuestion];
+    }
+    run.said = run.line;
 
     run.machine.sent();
     if (!run.machine.received()) return;
-    this.playSignalPings(run, step.pings.map((ping) => ({ id: ping.id, line: ui[ping.line] })));
-    let opened = false;
-    if (step.open) {
-      opened = await agents.openDesktop(url);
+    if (codexStep) this.playSignalPings(run, codexStep.pings.map((ping) => ({ id: ping.id, line: ui[ping.line] })));
+    if (openNow) {
+      const opened = await agents.openDesktop(url);
       if (!this.alive(run)) return;
       if (!opened) {
-        run.line = ui.desktopMissing;
-        run.said = ui.desktopMissing;
-        run.markdown = [...run.markdown, ui.desktopMissing];
+        run.line = openingWeb ? ui.webMissing : ui.desktopMissing;
+        run.said = run.line;
+        run.markdown = [...run.markdown, run.line];
       }
     }
     this.showRecord(run);
     await this.finish(run);
     if (!this.thread) return;
-    if (step.open) {
+    if (openNow) {
       if (this.codexWait?.threadId === this.thread.id) this.codexWait = null;
       return;
     }
     this.codexWait = {
+      kind: route.to === 'ask' ? route.for : 'codex',
       threadId: this.thread.id, dirId: saved.dirId, overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths,
-      recordPath: saved.recordPath, app: run.app, title: run.title, selection, text: spotText,
-      folder: folder.path, conversation,
+      recordPath: saved.recordPath, app: page.app, title: page.title, selection: page.selection, text: page.text,
+      folder: page.folder, conversation,
     };
   }
 
@@ -1601,7 +1671,7 @@ export class AskController extends EventEmitter {
     const agent = run.session ? { agent: run.session } : {};
     const codex = run.codexLink ? { codex: run.codexLink } : {};
     const meta = {
-      title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
+      title: (run.recordTitle || run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
       profile: run.profile?.name ?? '', ...agent, ...codex,
     };
     // The thread is kept here first, so it continues even when history is off and append saves nothing.
@@ -1726,7 +1796,9 @@ export class AskController extends EventEmitter {
     entries.push(...(run.visitor ? pair.slice(1) : pair));
     return {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
-      title: run.thread?.title ?? (run.line || (run.visitor ? run.tag.name : run.intent.label)).slice(0, TITLE_MAX),
+      title: run.recordTitle
+        ?? run.thread?.title
+        ?? (run.line || (run.visitor ? run.tag.name : run.intent.label)).slice(0, TITLE_MAX),
       footer: {
         profile: run.profile?.name ?? '', model: run.profile?.kind === 'builtin' ? run.profile.model : '',
         route: run.route, tokens: run.tokens,
