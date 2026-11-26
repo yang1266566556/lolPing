@@ -79,6 +79,8 @@ interface HarnessOptions {
   foregroundPid?: number;
   /** Hears the foreground app of each ask. */
   seenApp?: (app: string) => void;
+  /** Present when the ask can open Codex desktop. */
+  agents?: AskDeps['agents'];
 }
 
 interface Screen {
@@ -275,6 +277,7 @@ function harness(opts: HarnessOptions = {}) {
       },
       amend: async (threadId, at, done) => void amends.push({ threadId, at, done }),
     },
+    ...(opts.agents ? { agents: opts.agents } : {}),
     tempDir: () => 'tmp',
     thumbnail: (jpeg) => {
       thumbs.push(jpeg.toString());
@@ -292,6 +295,7 @@ function harness(opts: HarnessOptions = {}) {
       removeDir: async (d) => {
         for (const f of [...disk]) if (f === d || f.startsWith(`${d}/`)) disk.delete(f);
       },
+      copy: async (from, to) => void disk.add(to).add(from),
     },
   };
   const ctl = new AskController(deps);
@@ -2052,5 +2056,40 @@ describe('AskController', () => {
     expect(h.adapters).toEqual([]);
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
     expect(h.ctl.running).toBe(false);
+  });
+
+  it('pings first and opens Codex desktop only after a reply', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const h = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    h.ctl.ask([spot('generic')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(h.pings().map((p) => p.id)).toEqual(['generic']);
+    expect(h.appends.at(-1)?.line).toBe(t.ui.seeIt);
+    expect(h.cards().at(-1)?.follow).toBeUndefined();
+
+    h.ctl.ask([spot('generic')], { text: 'look at the null check', newThread: false });
+    await flush();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/^codex:\/\/threads\/new\?prompt=/);
+    expect(opened[0]).toContain('path=D%3A%5Cwork%5Capp');
+    expect(opened[0]).not.toContain('answer only');
+    expect(h.pings().map((p) => p.id)).toEqual(['generic', 'omw']);
+    expect(h.cards().at(-1)?.follow).toBe('codex');
   });
 });

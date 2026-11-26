@@ -1,16 +1,16 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
 import type { Platform } from '../../shared/platform';
 import { sanitizeName } from '../../shared/roomProtocol';
 import type { Settings } from '../../shared/settings';
-import { resumeArgs } from '../../shared/teammate/agentProfiles';
 import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
 import {
-  codexFinalMessage, dispatchArgv, dispatchOf, dispatchProfile, dispatchPrompt, dispatchTask,
+  absoluteFolder, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile, isCodexDesktopUrl,
+  type PingLine,
 } from '../../shared/teammate/dispatch';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
 import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
@@ -36,6 +36,7 @@ import {
 import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
 import type { BridgeHandler } from '../mcp/bridgeServer';
 import type { OverlayManager } from '../overlayManager';
+import { resolveInside } from '../safePath';
 import { RateLimiter } from '../rateLimiter';
 import type { ActionRunner, RunInfo } from './actions';
 import { AgentStartError, type AgentRun, type AgentRunner } from './agents/runner';
@@ -90,6 +91,7 @@ export interface AskDeps {
     write(path: string, text: string): Promise<void>;
     makeDir(path: string): Promise<void>;
     removeDir(path: string): Promise<void>;
+    copy(from: string, to: string): Promise<void>;
   };
   /** Runs agent profiles; without it an agent ask fails as when lolPing's end of the bridge couldn't open. */
   agents?: {
@@ -106,7 +108,11 @@ export interface AskDeps {
     openTerminal?(o: {
       cwd: string; command: string; args: readonly string[]; extraEnv?: Record<string, string>;
     }): Promise<boolean>;
+    /** Opens a codex:// link in the desktop app. False when the handler isn't there. Never starts a terminal. */
+    openDesktop?(url: string): Promise<boolean>;
   };
+  /** Folder that keeps a signal's screenshots after the ask's temp folder is deleted. */
+  recordsDir?: () => string;
 }
 
 /** Spec §7.1, §9.5: tool rounds per answer, the gap between a set of pings, and "the same spot". */
@@ -229,10 +235,10 @@ interface Run {
   bubbleBack: boolean;
   /** Dispatch leaves the ask folder: Codex reads task.md after the ask has ended. */
   keepDir: boolean;
-  /** The bubble and card button after a dispatch. */
-  follow: 'reopen' | 'resume' | null;
-  /** What Open again runs. Resume uses the session instead. */
-  reopen: { cwd: string; command: string; args: readonly string[] } | null;
+  /** The bubble and card button that opens the Codex desktop link again. */
+  follow: 'codex' | null;
+  /** The link and the screenshot folder, stored with the thread. */
+  codexLink: { url: string; dirId: string } | null;
 }
 
 /** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
@@ -399,6 +405,7 @@ export class AskController extends EventEmitter {
   private bubbleTimer: Timer | null = null;
   private bubbleEndsAt = 0;
   private fadeTimer: Timer | null = null;
+  /** Pings still waiting out the gap between a set. Cleared when the page under them moves. */
   private readonly pingTimers = new Set<Timer>();
   /** The run the stale watch is on, from its first mark or bubble until both are gone. */
   private watched: Run | null = null;
@@ -410,6 +417,20 @@ export class AskController extends EventEmitter {
   private thread: ThreadRecord | null = null;
   /** A thread opened from History that the card shows; its reply box continues it. */
   private viewed: ThreadRecord | null = null;
+  /** A signal whose teammate already asked what the user needs. The next reply on that thread opens Codex. */
+  private codexWait: {
+    threadId: string;
+    dirId: string;
+    overviewPath: string;
+    zoomPaths: string[];
+    recordPath: string;
+    app: string;
+    title: string;
+    selection: string;
+    text: string;
+    folder: string;
+    conversation: PingLine[];
+  } | null = null;
   /** The last answer's history entry: an action done after it was written (after consent) is added to it. */
   private entry: { ask: string; at: number; thread: Promise<string | null> } | null = null;
   /** The runner's put button for the answer on screen: the bubble and the card show it. */
@@ -435,6 +456,7 @@ export class AskController extends EventEmitter {
         await mkdir(p, { recursive: true });
       },
       removeDir: (p) => rm(p, { recursive: true, force: true }),
+      copy: (from, to) => copyFile(from, to),
     };
     deps.actions?.on('described', (ask: string, done: string[]) => this.amendDone(ask, done));
     deps.actions?.on('put', (state: PutState) => this.showPut(state));
@@ -487,7 +509,7 @@ export class AskController extends EventEmitter {
       calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, reopen: null,
+      keepDir: false, follow: null, codexLink: null,
     };
     this.run = run;
     this.shown = run;
@@ -537,6 +559,7 @@ export class AskController extends EventEmitter {
   forgetThread(id?: string): void {
     if (id === undefined || this.thread?.id === id) this.thread = null;
     if (id === undefined || this.viewed?.id === id) this.viewed = null;
+    if (id === undefined || this.codexWait?.threadId === id) this.codexWait = null;
   }
 
   /** History's Continue: the next push, reply or words go into this thread. */
@@ -553,6 +576,7 @@ export class AskController extends EventEmitter {
       view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
       entries: this.threadEntries(record, lang, t.tagName), streaming: false,
       footer: { profile: record.profile, model: '', route: '', tokens: null, used: [] }, put: null,
+      ...(record.codex && isCodexDesktopUrl(record.codex.url) ? { follow: 'codex' as const } : {}),
     });
     this.cardShown = true;
     this.viewed = record;
@@ -601,7 +625,7 @@ export class AskController extends EventEmitter {
         if (run?.info && (view === 'bubble' || view === 'card')) void this.deps.actions?.put(run.info, view);
         break;
       case 'follow':
-        if (run) void this.followDispatch(run);
+        void this.openCodexAgain(run);
         break;
       default:
         break;
@@ -791,7 +815,7 @@ export class AskController extends EventEmitter {
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
       box: null, info: null, stale: false, bubbleBack: false,
-      keepDir: false, follow: null, reopen: null,
+      keepDir: false, follow: null, codexLink: null,
     };
   }
 
@@ -807,8 +831,7 @@ export class AskController extends EventEmitter {
     } finally {
       // Also when the ask was cancelled mid-capture: context-helper may still write into the folder, and fails once
       // it is gone. Whatever slips past that is removed with the whole temp folder when the teammate stops or starts.
-      // A dispatch leaves the folder: the terminal's Codex reads task.md after this ask has ended. The temp root
-      // still goes when the teammate starts or stops.
+      // The signal's screenshots are copied out before this. The temp root still goes when the teammate starts or stops.
       if (!run.keepDir) this.files.removeDir(run.dir).catch(() => undefined);
     }
   }
@@ -825,7 +848,7 @@ export class AskController extends EventEmitter {
     run.app = front.app;
     run.title = front.title;
     run.window = front.window;
-    if (run.intent.def.kind === 'dispatch') return this.dispatchAsk(run, reading);
+    if (dispatchProfile(this.deps.settings().teammate.profiles)) return this.desktopAsk(run, reading);
     if (front.profile && !isBuiltin(front.profile)) return this.askAgent(run, front.profile, front.route, reading);
     const profile = front.profile && isBuiltin(front.profile) ? front.profile : null;
     const { key } = front;
@@ -977,57 +1000,112 @@ export class AskController extends EventEmitter {
     };
   }
 
-  /** Opens the dispatch terminal again, or resumes the session Codex printed. */
-  private async followDispatch(run: Run): Promise<void> {
-    const agents = this.deps.agents;
-    const open = agents?.openTerminal;
-    if (!open) return;
-    if (run.follow === 'resume' && run.session && run.profile?.kind === 'agent') {
-      const args = resumeArgs(run.profile, run.session.session);
-      if (args) {
-        await open({ cwd: run.session.cwd, command: run.profile.command, args });
-        return;
-      }
-    }
-    if (run.reopen) await open({ cwd: run.reopen.cwd, command: run.reopen.command, args: run.reopen.args });
+  /** Opens the saved Codex desktop link again. A failed handler says so. It never falls back to a terminal. */
+  private async openCodexAgain(run: Run | null): Promise<void> {
+    const saved = run?.codexLink?.url ?? this.viewed?.codex?.url ?? null;
+    const open = this.deps.agents?.openDesktop;
+    if (!saved || !isCodexDesktopUrl(saved) || !open) return;
+    const ok = await open(saved);
+    if (ok || !run) return;
+    const ui = strings(run.lang).teammate.ui;
+    run.line = ui.desktopMissing;
+    run.said = ui.desktopMissing;
+    this.showLine(run, run.line);
+    this.showRecord(run);
   }
 
-  /** The bubble, and for a background run the card as well, so both carry the follow button. */
-  private showDispatchSurfaces(run: Run, card: boolean): void {
+  /** The bubble and the record card. The card stays, so the screenshots and the ping thread don't vanish with the bubble. */
+  private showRecord(run: Run): void {
     this.deps.overlay.mateSaid();
     this.showLine(run, run.line);
-    if (!card) return;
     const at = this.popupAt(run);
     this.deps.windows.showCard({ x: at.x, y: at.y + 96 }, this.cardState(run, false));
     this.cardShown = true;
     this.clearTimer('fade');
   }
 
+  /** A League ping at the signal, with its own art and sound. `keep` holds it until the marks are cleared. */
+  private signalPing(run: Run, id: 'generic' | 'omw', line: string): void {
+    if (run.stale) return;
+    const at = this.deps.overlay.toLocal(run.spots[0]?.phys ?? run.receipt);
+    if (!at) return;
+    this.deps.overlay.spawnMate({ ...at, id, keep: true, tag: run.tag, label: line });
+    this.marksShown = true;
+    this.watchShown(run);
+  }
+
+  /** The question ping now, and On My Way after a short gap. The gap timer is not an ask deadline. */
+  private playSignalPings(run: Run, pings: { id: 'generic' | 'omw'; line: string }[]): void {
+    pings.forEach((ping, i) => {
+      const fire = (): void => this.signalPing(run, ping.id, ping.line);
+      if (i === 0) fire();
+      else this.timer(i * PING_GAP_MS, fire);
+    });
+  }
+
   /**
-   * Hands the ask to Codex to do. Interactive opens a terminal on the task. Background runs `codex exec` with that
-   * same task prompt, then shows Codex's final message. The headless "answer only with the lolping tools" prompt is
-   * not used. The ask folder keeps task.md and the screenshots; an interactive run leaves the folder for Codex to read.
+   * Copies the screenshots out of the ask's temp folder, which is deleted when the ask ends, and writes the record
+   * Codex is told to read.
    */
-  private async dispatchAsk(run: Run, reading: Reading): Promise<void> {
+  private async saveSignal(
+    run: Run,
+    scene: { cap: { overviewPath: string; zooms: { path: string }[] } },
+    conversation: PingLine[],
+    folder: string,
+    selection: string,
+    text: string,
+  ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string } | null> {
+    const dirId = run.machine.id;
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(dirId)) return null;
+    const root = this.deps.recordsDir?.() ?? join(this.deps.tempDir(), 'codex-signals');
+    const dir = resolveInside(root, dirId);
+    if (!dir) return null;
+    await this.files.makeDir(dir);
+    const overviewPath = join(dir, 'overview.jpg');
+    await this.files.copy(scene.cap.overviewPath, overviewPath);
+    const zoomPaths: string[] = [];
+    for (let i = 0; i < scene.cap.zooms.length; i += 1) {
+      const zoom = scene.cap.zooms[i];
+      if (!zoom) continue;
+      const to = join(dir, `zoom-${i + 1}.jpg`);
+      await this.files.copy(zoom.path, to);
+      zoomPaths.push(to);
+    }
+    const recordPath = join(dir, 'signal.md');
+    await this.files.write(recordPath, codexDesktopPrompt({
+      overviewPath, zoomPaths, recordPath, app: run.app, title: run.title, selection, text, folder, conversation,
+    }));
+    return { dirId, overviewPath, zoomPaths, recordPath };
+  }
+
+  /** A reply stays on the first signal's screenshots. The record file is rewritten with the longer conversation. */
+  private async rewriteSignal(
+    held: NonNullable<AskController['codexWait']>,
+    conversation: PingLine[],
+  ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string }> {
+    await this.files.write(held.recordPath, codexDesktopPrompt({
+      overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
+      app: held.app, title: held.title, selection: held.selection, text: held.text, folder: held.folder, conversation,
+    }));
+    return {
+      dirId: held.dirId, overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
+    };
+  }
+
+  /**
+   * The main ask, when Open in Codex desktop is on. The teammate pings back at the spot first. Codex desktop opens
+   * only after the user replies, or when this signal already said what they want. The link prefills the composer.
+   */
+  private async desktopAsk(run: Run, reading: Reading): Promise<void> {
     const { agents } = this.deps;
     const words = strings(run.lang).teammate.ask;
     const ui = strings(run.lang).teammate.ui;
     const profile = dispatchProfile(this.deps.settings().teammate.profiles);
     for (const d of run.deadlines) clearTimeout(d);
     run.deadlines = [];
-    if (!profile) return this.fail(run, 'noProfile', words.dispatchOff);
-    const mode = dispatchOf(profile).mode;
-    if (!agents?.openTerminal) return this.fail(run, 'agentStart', words.agent.noBridge);
+    if (!profile || !agents?.openDesktop) return this.fail(run, 'noProfile', words.agent.noBridge);
     run.profile = profile;
-    run.route = words.dispatchRoute;
-    this.deadline(run, profile.timeoutS * 1000, () => {
-      if (!this.alive(run)) return;
-      if (!drew(run)) this.fail(run, 'timeout');
-      else this.finish(run).catch((err: unknown) => console.warn('[teammate] ask failed:', err));
-    });
-    const token = `${run.machine.id}.${randomBytes(ASK_SECRET_BYTES).toString('hex')}`;
-    const bridge = agents.bridge.command(token);
-    if (!bridge) return this.fail(run, 'agentStart', words.agent.noBridge);
+    run.route = words.desktopRoute;
     if (!run.display) return this.fail(run, 'capture');
     run.machine.startGathering();
 
@@ -1037,78 +1115,64 @@ export class AskController extends EventEmitter {
     const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
     run.cwd = folder.path;
     run.folder = folder.label;
-    const images = {
-      overview: baseName(scene.cap.overviewPath), zooms: scene.cap.zooms.map((z) => baseName(z.path)),
-    };
     const focus = ctx.system?.focus;
     const focusText = focus && !focus.secure && focus.value !== '' ? `${focus.label}: ${focus.value}` : '';
     const spotText = [focusText, ...(ctx.system?.spotTexts ?? [])].filter((s) => s.trim() !== '').join('\n');
-    await this.files.write(join(run.dir, 'task.md'), dispatchTask({
-      askDir: run.dir, folder: folder.path, words: run.words, app: run.app, title: run.title,
-      selection: ctx.system?.selection ?? '', text: spotText, images, instructions: ctx.instructions,
-    }));
-    if (!this.alive(run)) return;
-    const argv = dispatchArgv(profile.preset, mode, bridge, run.dir, folder.path);
-    if (!argv) return this.fail(run, 'agentStart', words.dispatchOff);
-    run.machine.sent();
+    const selection = ctx.system?.selection ?? '';
+    const replying = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
+    const prior = replying && this.codexWait ? this.codexWait.conversation : [];
+    const userText = run.words?.trim() || run.intent.label;
+    const conversation: PingLine[] = [...prior, { who: 'user', ping: run.intent.def.id, text: userText }];
+    const step = desktopPings({ words: run.words, replying });
+    for (const ping of step.pings) conversation.push({ who: 'teammate', ping: ping.id, text: ui[ping.line] });
 
-    if (mode === 'interactive') {
-      const opened = await agents.openTerminal({
-        cwd: folder.path, command: profile.command, args: argv, extraEnv: { LOLPING_ASK_DIR: run.dir },
-      });
+    const held = replying ? this.codexWait : null;
+    const saved = held
+      ? await this.rewriteSignal(held, conversation)
+      : await this.saveSignal(run, scene, conversation, folder.path, selection, spotText);
+    if (!saved || !this.alive(run)) return;
+    const prompt = codexDesktopPrompt({
+      overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths, recordPath: saved.recordPath,
+      app: held?.app ?? run.app, title: held?.title ?? run.title,
+      selection: held?.selection ?? selection, text: held?.text ?? spotText,
+      folder: held?.folder ?? folder.path, conversation,
+    });
+    const url = codexDesktopUrl(prompt, absoluteFolder(held?.folder ?? folder.path));
+    // The link is stored once Codex is actually opened, so History doesn't offer it while the teammate is still asking.
+    run.codexLink = step.open ? { url, dirId: saved.dirId } : null;
+    run.follow = step.open ? 'codex' : null;
+    const lastPing = step.pings[step.pings.length - 1];
+    if (!lastPing) return;
+    run.line = ui[lastPing.line];
+    run.said = run.line;
+    const names = strings(run.lang).pingNames;
+    run.markdown = [conversation.map((turn) => `${names[turn.ping]}: ${turn.text}`).join('\n')];
+
+    run.machine.sent();
+    if (!run.machine.received()) return;
+    this.playSignalPings(run, step.pings.map((ping) => ({ id: ping.id, line: ui[ping.line] })));
+    let opened = false;
+    if (step.open) {
+      opened = await agents.openDesktop(url);
       if (!this.alive(run)) return;
-      if (!opened) return this.fail(run, 'agentStart', words.dispatchNoTerminal);
-      run.keepDir = true;
-      run.follow = 'reopen';
-      run.reopen = { cwd: folder.path, command: profile.command, args: argv };
-      run.line = ui.sentToCodex;
-      run.said = ui.sentToCodex;
-      this.received(run);
-      this.showDispatchSurfaces(run, false);
-      await this.finish(run);
+      if (!opened) {
+        run.line = ui.desktopMissing;
+        run.said = ui.desktopMissing;
+        run.markdown = [...run.markdown, ui.desktopMissing];
+      }
+    }
+    this.showRecord(run);
+    await this.finish(run);
+    if (!this.thread) return;
+    if (step.open) {
+      if (this.codexWait?.threadId === this.thread.id) this.codexWait = null;
       return;
     }
-
-    const spec: AgentRunSpec = {
-      prompt: dispatchPrompt(run.dir, folder.path), askDir: run.dir, bridge, resume: null,
-      mcpConfigPath: join(run.dir, 'mcp.json'), argv,
+    this.codexWait = {
+      threadId: this.thread.id, dirId: saved.dirId, overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths,
+      recordPath: saved.recordPath, app: run.app, title: run.title, selection, text: spotText,
+      folder: folder.path, conversation,
     };
-    let agentRun: AgentRun;
-    try {
-      const env = await agents.env();
-      if (!this.alive(run)) return;
-      agentRun = await agents.runner.start(profile, spec, folder.path, env);
-    } catch (err) {
-      if (!(err instanceof AgentStartError) || !this.alive(run)) throw err;
-      const { command } = profile;
-      const line = err.kind === 'notFound' ? words.agent.notFound(command)
-        : err.kind === 'noFolder' ? words.agent.noFolder(baseName(folder.path)) : words.agent.noStart(command);
-      return this.fail(run, 'agentStart', line);
-    }
-    if (!this.alive(run)) return agentRun.kill();
-    run.agentRun = agentRun;
-    run.abort.signal.addEventListener('abort', () => agentRun.kill(), { once: true });
-    this.received(run);
-    const result = await agentRun.done;
-    if (!this.alive(run)) return;
-    const message = codexFinalMessage(result.tail);
-    if ((result.code !== 0 && result.code !== null) && message === null) {
-      const error = result.error?.trim() ?? '';
-      const name = AGENT_PRESETS.codex.name;
-      return this.fail(run, 'agent', error
-        ? words.agent.error(name, error.slice(0, AGENT_ERROR_MAX)) : words.agent.stopped(name));
-    }
-    const body = message ?? words.dispatchNoMessage;
-    const split = splitLine(body, run.lang);
-    run.line = split.line;
-    run.said = split.line;
-    run.rest = split.rest;
-    // The line is the first sentence. The card keeps only what follows it.
-    if (split.rest) run.markdown = [split.rest];
-    this.keepSession(run, result.session);
-    if (run.session) run.follow = 'resume';
-    this.showDispatchSurfaces(run, true);
-    await this.finish(run);
   }
 
   /**
@@ -1516,14 +1580,15 @@ export class AskController extends EventEmitter {
       spots: run.spots.length,
     };
     const agent = run.session ? { agent: run.session } : {};
+    const codex = run.codexLink ? { codex: run.codexLink } : {};
     const meta = {
       title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
-      profile: run.profile?.name ?? '', ...agent,
+      profile: run.profile?.name ?? '', ...agent, ...codex,
     };
     // The thread is kept here first, so it continues even when history is off and append saves nothing.
     const now = this.deps.now();
     const local: ThreadRecord = run.thread
-      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry], ...agent }
+      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry], ...agent, ...codex }
       : { id: randomUUID(), ...meta, started: now, lastActivity: now, entries: [entry] };
     this.thread = local;
     const saving = this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);

@@ -299,7 +299,7 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
         <div className={st.buttons}>
           {s.follow ? (
             <Button size="small" appearance="primary" onClick={() => act({ t: 'follow' })}>
-              {s.follow === 'resume' ? t.continueTerminal : t.reopen}
+              {t.openCodex}
             </Button>
           ) : null}
           {cardButtons(put, s.answerOnly).map(button)}

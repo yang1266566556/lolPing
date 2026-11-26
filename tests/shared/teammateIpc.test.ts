@@ -18,6 +18,7 @@ const SAMPLES: Record<string, unknown> = {
   delete: { t: 'delete', id: 'a1b2-c3' },
   search: { t: 'search', query: 'invoice' },
   openInAgent: { t: 'openInAgent', id: 'a1b2-c3' },
+  openCodex: { t: 'openCodex', id: 'a1b2-c3' },
   allow: { t: 'allow', serial: 1 },
   always: { t: 'always', serial: 1 },
   decline: { t: 'decline', serial: 1 },
@@ -29,7 +30,7 @@ const ALLOWED: Record<MateView, string[]> = {
   bubble: ['more', 'dismiss', 'put', 'follow'],
   card: ['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow'],
   words: ['ask', 'cancel'],
-  history: ['open', 'continue', 'delete', 'search', 'openInAgent'],
+  history: ['open', 'continue', 'delete', 'search', 'openInAgent', 'openCodex'],
   consent: ['allow', 'always', 'decline'],
   form: ['cancel', 'fill'],
 };

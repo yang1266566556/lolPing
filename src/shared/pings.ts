@@ -1,6 +1,6 @@
 export type PingId =
   | 'danger' | 'push' | 'omw' | 'allin' | 'assist' | 'needvision' | 'missing' | 'enemyvision' | 'generic'
-  | 'bait' | 'visioncleared' | 'missingflip' | 'dispatch';
+  | 'bait' | 'visioncleared' | 'missingflip';
 
 export interface PingDef {
   id: PingId;
@@ -31,8 +31,6 @@ export const ALL_PINGS: readonly PingDef[] = [
   { id: 'visioncleared', name: 'Vision Cleared', icon: 'pingwheel_visionclearedrender', art: ['pingwheel_visionclearedrender'], sound: 'SRP_6', color: '#2b80ff' },
   // Not a League ping: Enemy Missing turned upside down ("¿"), asked for in #24. Older room peers drop it.
   { id: 'missingflip', name: 'Upside-down Missing', icon: 'enemy_missing_flipped', art: ['enemy_missing_flipped'], sound: 'MIA', color: '#f2c518' },
-  // Not a room ping. The ask wheel uses it for Dispatch and reuses the generic ping's art, so no new League asset.
-  { id: 'dispatch', name: 'Dispatch', icon: 'pingwheel_basicpingrender', art: ['pingwheel_basicpingrender'], sound: 'Base', color: '#2e8bff' },
 ];
 
 /** The wheel as League ships it, top (N) then clockwise. Array index = slice index from pickSlice(). */

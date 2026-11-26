@@ -15,7 +15,7 @@ export function newAgentProfile(
     id: o.id, kind: 'agent', name: preset ? preset.name : o.customName, tagColor: o.tagColor, tagColorCustom: null,
     preset: o.preset, command: preset ? preset.bin : CUSTOM_COMMAND, customArgs: preset ? [] : ['{prompt}'],
     folder: { kind: 'editor', folders: [] }, timeoutS: TIMEOUT_DEFAULT_S,
-    dispatch: { on: false, mode: 'interactive' } satisfies DispatchSettings,
+    dispatch: { on: false } satisfies DispatchSettings,
   };
 }
 

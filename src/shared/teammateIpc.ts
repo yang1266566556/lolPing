@@ -23,8 +23,6 @@ export interface WordsState {
   thread: string | null;
   /** The New thread switch starts off: the thread had activity in the last few minutes. */
   continueByDefault: boolean;
-  /** A Codex profile has Dispatch on: the box can send the words as a task for Codex to do. */
-  dispatch: boolean;
 }
 
 /** The put button the bubble and card show: Paste, Replace, Fill, Paste when ready, or none. */
@@ -41,8 +39,8 @@ export interface BubbleState {
   /** There is more than the line: the More button is shown. */
   more: boolean;
   put: PutState;
-  /** After a dispatch: open the terminal again, or resume the session Codex printed. */
-  follow?: 'reopen' | 'resume';
+  /** Opens the saved Codex desktop link again. */
+  follow?: 'codex';
 }
 
 export interface CardState {
@@ -57,8 +55,8 @@ export interface CardState {
   put: PutState;
   /** An agent's unprompted answer: no reply box and no Whole picture, which would ask the user's own teammate. */
   answerOnly?: boolean;
-  /** After a dispatch: open the terminal again, or resume the session Codex printed. */
-  follow?: 'reopen' | 'resume';
+  /** Opens the saved Codex desktop link again. */
+  follow?: 'codex';
 }
 
 /** One thread in the History window's list. */
@@ -70,6 +68,8 @@ export interface HistoryThread {
   intents: PingId[];
   /** The agent profile's name when the thread's session can be opened in a terminal; the button reads "Open in" it. */
   agent?: string;
+  /** The signal was handed to Codex desktop: History can open that link again. */
+  codex?: boolean;
 }
 
 export interface HistoryState {
@@ -148,14 +148,15 @@ export type MateAction =
   | { t: 'deep' }
   | { t: 'history' }
   | { t: 'link'; url: string }
-  | { t: 'ask'; text: string; newThread: boolean; dispatch?: boolean }
-  /** The bubble or card button after a dispatch: open the terminal again, or resume the session. */
+  | { t: 'ask'; text: string; newThread: boolean }
+  /** The bubble or card button: open the saved Codex desktop link again. */
   | { t: 'follow' }
   | { t: 'cancel' }
   | { t: 'open'; id: string }
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
   | { t: 'openInAgent'; id: string }
+  | { t: 'openCodex'; id: string }
   | { t: 'search'; query: string }
   /** The bubble's or card's put button: the click is the user's consent to that paste or fill. */
   | { t: 'put' }
@@ -205,7 +206,7 @@ const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
   bubble: new Set(['more', 'dismiss', 'put', 'follow']),
   card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put', 'follow']),
   words: new Set(['ask', 'cancel']),
-  history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent']),
+  history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent', 'openCodex']),
   consent: new Set(['allow', 'always', 'decline']),
   form: new Set(['fill', 'cancel']),
 };
@@ -254,7 +255,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
       return words(a.text) ? { t: 'reply', text: a.text } : null;
     case 'ask':
       return words(a.text) && typeof a.newThread === 'boolean'
-        ? { t: 'ask', text: a.text, newThread: a.newThread, ...(a.dispatch === true ? { dispatch: true } : {}) }
+        ? { t: 'ask', text: a.text, newThread: a.newThread }
         : null;
     case 'link': {
       const url = webUrl(a.url);
@@ -264,6 +265,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'continue':
     case 'delete':
     case 'openInAgent':
+    case 'openCodex':
       return threadId(a.id) ? { t: a.t, id: a.id } : null;
     case 'fill': {
       const ids: unknown = a.ids;

@@ -139,6 +139,7 @@ function harness(opts: Options = {}) {
       write: async () => undefined,
       makeDir: async () => undefined,
       removeDir: async () => undefined,
+      copy: async () => undefined,
     },
     actions,
     cursor: () => CURSOR,

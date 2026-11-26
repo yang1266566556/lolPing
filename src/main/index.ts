@@ -25,7 +25,7 @@ import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
 import { openInRows, resumableProfile, resumeArgs } from '../shared/teammate/agentProfiles';
-import { showDispatch } from '../shared/teammate/dispatch';
+import { isCodexDesktopUrl } from '../shared/teammate/dispatch';
 import { wordsContinuesByDefault } from '../shared/teammate/threads';
 import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
@@ -36,6 +36,7 @@ import { EmoteCache } from './emoteCache';
 import { EmoteLibrary, resolveEmoteArt } from './emoteLibrary';
 import { EmoteTransfer } from './emoteTransfer';
 import { isFile } from './fileState';
+import { resolveInside } from './safePath';
 import { InputBridge } from './inputBridge';
 import { LanTransport } from './lanTransport';
 import { RELAYS } from './relays';
@@ -814,10 +815,26 @@ function start(): void {
         // A failure is told in the list, which is made again either way.
         await openInAgent(await m.history.get(a.id));
         return refreshHistory(m);
-      case 'delete':
+      case 'openCodex': {
+        const record = await m.history.get(a.id);
+        const url = record?.codex?.url;
+        if (url && isCodexDesktopUrl(url)) {
+          const opened = await shell.openExternal(url).then(() => true, () => false);
+          if (!opened) historyOpenFailed = 'codex-desktop';
+        }
+        return refreshHistory(m);
+      }
+      case 'delete': {
+        const record = await m.history.get(a.id);
+        const dirId = record?.codex?.dirId;
+        if (dirId) {
+          const dir = resolveInside(join(app.getPath('userData'), 'codex-signals'), dirId);
+          if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        }
         await m.history.delete(a.id);
         m.controller.forgetThread(a.id);
         return refreshHistory(m);
+      }
       case 'search':
         historyQuery = a.query;
         return refreshHistory(m);
@@ -836,8 +853,7 @@ function start(): void {
       const last = spots?.at(-1);
       if (action.t !== 'ask' || !spots || !last) return;
       // The words are the question, whatever slice the held spots were released on.
-      const intent = action.dispatch ? 'dispatch' as const : 'generic' as const;
-      const asked = [...spots.slice(0, -1), { ...last, intent }];
+      const asked = [...spots.slice(0, -1), { ...last, intent: 'generic' as const }];
       m.controller.ask(asked, { text: action.text, newThread: action.newThread });
       return;
     }
@@ -942,7 +958,9 @@ function start(): void {
           return file !== null && isDirectory(cwd)
             && launchTerminal({ spawn, platform: PLATFORM, cwd, file, args, env });
         },
+        openDesktop: (url) => shell.openExternal(url).then(() => true, () => false),
       },
+      recordsDir: () => join(userData, 'codex-signals'),
       settings: () => settings,
       lang: mateLang,
       secrets,
@@ -1064,7 +1082,6 @@ function start(): void {
       m.windows.showWords(overlays.toDip(last.phys) ?? overlays.primaryDip(), {
         view: 'words', lang: mateLang(), tag: mateTag(), thread: current?.title ?? null,
         continueByDefault: wordsContinuesByDefault(current, Date.now()),
-        dispatch: showDispatch(settings.teammate),
       });
     } catch (err) {
       console.warn('[teammate] words box:', err);

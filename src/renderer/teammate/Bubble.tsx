@@ -74,7 +74,7 @@ export function Bubble({ s, t, act, leaving }: {
             <Text key={s.line} className={mergeClasses(st.line, m.rise)}>{s.line}</Text>
             {s.follow ? (
               <Button key="follow" className={m.pop} size="small" appearance="primary" onClick={() => act({ t: 'follow' })}>
-                {s.follow === 'resume' ? t.continueTerminal : t.reopen}
+                {t.openCodex}
               </Button>
             ) : null}
             {bubbleButtons(s.more, put).map((b) => (b === 'more' ? (

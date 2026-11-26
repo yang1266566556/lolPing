@@ -11,7 +11,7 @@ const validProfile = {
 const validAgent = {
   id: 'ag', kind: 'agent', name: 'Claude', tagColor: 1, tagColorCustom: null, preset: 'claude', command: 'claude',
   customArgs: [], folder: { kind: 'editor', folders: ['C:\\code'] }, timeoutS: 300,
-  dispatch: { on: false, mode: 'interactive' },
+  dispatch: { on: false },
 };
 
 describe('normalizeTeammate', () => {
@@ -115,13 +115,14 @@ describe('normalizeTeammate', () => {
     expect(normalizeTeammate({ permissions: ['a:paste'] }, win).permissions).toEqual([]);
   });
 
-  it('fills dispatch as off and interactive when the block is missing or broken', () => {
-    const on = { ...validAgent, dispatch: { on: true, mode: 'background' as const } };
+  it('keeps an old dispatch switch and drops the terminal or background mode', () => {
+    const on = { ...validAgent, dispatch: { on: true, mode: 'background' } };
     const kept = normalizeTeammate({ profiles: [on] }, win).profiles[0];
-    expect(kept).toMatchObject({ dispatch: { on: true, mode: 'background' } });
+    expect(kept).toMatchObject({ dispatch: { on: true } });
+    expect(kept).not.toHaveProperty('dispatch.mode');
     const bad = { ...validAgent, dispatch: { on: 'yes', mode: 'later' } };
     const filled = normalizeTeammate({ profiles: [bad] }, win).profiles[0];
-    expect(filled).toMatchObject({ dispatch: { on: false, mode: 'interactive' } });
+    expect(filled).toMatchObject({ dispatch: { on: false } });
   });
 
   it('keeps a valid agent profile and fills its defaults', () => {
@@ -130,7 +131,7 @@ describe('normalizeTeammate', () => {
     expect(normalizeTeammate({ profiles: [bare] }, win).profiles).toEqual([{
       id: 'b', kind: 'agent', name: 'Bare', tagColor: DEFAULT_TEAMMATE.tagColor, tagColorCustom: null, preset: 'custom',
       command: 'my-agent', customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
-      dispatch: { on: false, mode: 'interactive' },
+      dispatch: { on: false },
     }]);
   });
 

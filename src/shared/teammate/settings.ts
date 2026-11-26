@@ -45,22 +45,19 @@ export interface AgentProfile {
   folder: { kind: 'fixed'; path: string } | { kind: 'editor'; folders: string[] };
   timeoutS: number;
   /**
-   * Hand the pinged thing to this agent to do. Off until the user turns it on. Only Codex is wired; other presets keep
-   * the field so a later one can grow a dispatch of its own. Missing on an old profile means off, in a terminal.
+   * Open Codex desktop after a ping conversation. Off until the user turns it on. Only Codex is wired; other presets
+   * keep the field so a later one can grow a handoff of its own. Missing on an old profile means off.
    */
   dispatch?: DispatchSettings;
 }
 
-/** How a dispatch runs: a visible terminal, or a background run that reports the final message. */
-export type DispatchMode = 'interactive' | 'background';
-
+/** Open the Codex desktop app after the teammate pings back. Off until the user turns it on. */
 export interface DispatchSettings {
   on: boolean;
-  mode: DispatchMode;
 }
 
 /** What an agent profile uses when the settings file has no dispatch block. */
-export const DEFAULT_DISPATCH: DispatchSettings = { on: false, mode: 'interactive' };
+export const DEFAULT_DISPATCH: DispatchSettings = { on: false };
 
 export type Profile = BuiltinProfile | AgentProfile;
 
@@ -229,7 +226,8 @@ function agentProfile(raw: Record<string, unknown>, id: string, name: string): A
 
 function normalizeDispatch(raw: unknown): DispatchSettings {
   const d = isObj(raw) ? raw : {};
-  return { on: bool(d.on, false), mode: d.mode === 'background' ? 'background' : 'interactive' };
+  // Older files also stored `mode` (terminal or background exec). That choice is gone. `on` still means the handoff.
+  return { on: bool(d.on, false) };
 }
 
 function profile(raw: unknown): Profile | null {

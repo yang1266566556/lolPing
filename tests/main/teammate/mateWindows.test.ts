@@ -118,7 +118,7 @@ const card: CardState = {
   view: 'card', lang: 'en', tag, title: 'Typo', entries: [{ kind: 'answer', label: 'Mate', markdown: '**typo**' }],
   streaming: false, footer: { profile: 'Default', model: 'm', route: '', tokens: null, used: [] }, put: null,
 };
-const words: WordsState = { view: 'words', lang: 'en', tag, thread: null, continueByDefault: false, dispatch: false };
+const words: WordsState = { view: 'words', lang: 'en', tag, thread: null, continueByDefault: false };
 const consent: ConsentState = {
   view: 'consent', lang: 'en', tag, action: 'paste', text: 'Paste this into Chrome?', detail: 'Hello there', always: true, seconds: 30,
 };

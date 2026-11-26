@@ -130,18 +130,17 @@ function AgentNotes({ p }: { p: AgentProfile }) {
   );
 }
 
-/** Dispatch to Codex: off until the user turns it on. The working folder is the profile's project folder. */
+/** Open in Codex desktop: off until the user turns it on. The working folder is the profile's project folder. */
 function DispatchRows({ p, onChange }: { p: AgentProfile; onChange(patch: Partial<AgentProfile>): void }) {
   const t = useText();
   const m = t.teammate.settings;
   const d = dispatchOf(p);
   const folder = p.folder.kind === 'fixed' ? p.folder.path : p.folder.folders.join('\n');
-  const set = (patch: Partial<typeof d>): void => onChange({ dispatch: { ...d, ...patch } });
   return (
     <>
       <span>{m.dispatchTitle}</span>
       <div className="mateStack">
-        <OnOffSwitch checked={d.on} label={m.dispatchTitle} onChange={(on) => set({ on })} />
+        <OnOffSwitch checked={d.on} label={m.dispatchTitle} onChange={(on) => onChange({ dispatch: { on } })} />
         <span className="desc">{m.dispatchDesc}</span>
       </div>
       <span>{m.dispatchFolder}</span>
@@ -149,12 +148,6 @@ function DispatchRows({ p, onChange }: { p: AgentProfile; onChange(patch: Partia
         <span className={folder ? 'matePath' : 'desc'} style={{ whiteSpace: 'pre-wrap' }}>{folder || m.agentFolderNone}</span>
         <span className="desc">{m.dispatchFolderDesc}</span>
       </div>
-      <span>{m.dispatchMode}</span>
-      <RadioGroup value={d.mode} aria-label={m.dispatchMode}
-        onChange={(_, data) => set({ mode: data.value === 'background' ? 'background' : 'interactive' })}>
-        <Radio value="interactive" label={m.dispatchInteractive} />
-        <Radio value="background" label={m.dispatchBackground} />
-      </RadioGroup>
     </>
   );
 }

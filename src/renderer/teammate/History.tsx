@@ -4,6 +4,7 @@ import {
 import { Delete16Regular } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Strings } from '../../shared/i18n';
+import { isPingId, pingById, textureUrl } from '../../shared/pings';
 import type { HistoryState, MateAction } from '../../shared/teammateIpc';
 import { groupByDay, type Day } from './historyDays';
 import { reducedMotion, stagger, useMotion } from './motion';
@@ -48,6 +49,8 @@ const useStyles = makeStyles({
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms', ':hover': { transform: 'none' } },
   },
   text: { flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column' },
+  pings: { display: 'flex', columnGap: '4px', flexShrink: 0 },
+  ping: { width: '28px', height: '28px' },
   ellipsis: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   meta: { color: tokens.colorNeutralForeground3 },
   note: { color: tokens.colorNeutralForeground2 },
@@ -121,7 +124,9 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
       ) : (
         <>
           {s.openFailed !== undefined && (
-            <Text className={st.error} role="status">{ui.openInFailed(s.openFailed)}</Text>
+            <Text className={st.error} role="status">
+              {s.openFailed === 'codex-desktop' ? ui.desktopMissing : ui.openInFailed(s.openFailed)}
+            </Text>
           )}
           <SearchBox
             className={st.search}
@@ -153,6 +158,15 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
                   )}
                   style={removing.has(th.id) || !shown(th.id) ? undefined : stagger(seen.get(th.id) ?? 0)}
                 >
+                  <div className={st.pings}>
+                    {th.intents.map((id) => {
+                      const ping = isPingId(id) ? pingById(id) : undefined;
+                      if (!ping) return null;
+                      return (
+                        <img key={id} className={st.ping} src={textureUrl(ping.icon)} alt={t.teammate.intent[id].label} />
+                      );
+                    })}
+                  </div>
                   <div className={st.text}>
                     <Text weight="semibold" className={st.ellipsis}>{th.title}</Text>
                     <Caption1 className={mergeClasses(st.meta, st.ellipsis)}>
@@ -161,6 +175,9 @@ export function History({ s, t, act }: { s: HistoryState; t: Strings; act: (a: M
                         .join(' · ')}
                     </Caption1>
                   </div>
+                  {th.codex === true && (
+                    <Button size="small" onClick={() => act({ t: 'openCodex', id: th.id })}>{ui.openCodex}</Button>
+                  )}
                   <Button size="small" onClick={() => act({ t: 'open', id: th.id })}>{ui.open}</Button>
                   <Button size="small" appearance="primary" onClick={() => act({ t: 'continue', id: th.id })}>
                     {ui.continueThread}
