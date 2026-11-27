@@ -30,6 +30,7 @@ describe('newAgentProfile', () => {
     expect(newAgentProfile({ ...base, preset: 'claude', customName: 'Custom command' })).toEqual({
       id: 'p1', kind: 'agent', name: 'Claude Code', tagColor: 5, tagColorCustom: null, preset: 'claude',
       command: 'claude', customArgs: [], folder: { kind: 'editor', folders: [] }, timeoutS: 300,
+      dispatch: { on: false },
     });
   });
 

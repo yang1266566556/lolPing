@@ -12,6 +12,11 @@ export interface ThreadRecord {
   profile: string;
   /** The agent session the thread's answers came from, and the folder it ran in: dsh resumes only there. */
   agent?: { profileId: string; session: string; cwd: string };
+  /**
+   * Codex desktop or ChatGPT's website was opened for this signal.
+   * `dirId` names the screenshot folder under the signals directory.
+   */
+  codex?: { url: string; dirId: string };
   entries: {
     at: number;
     intent: PingId;

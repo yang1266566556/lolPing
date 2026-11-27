@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { HistoryStore } from '../../../src/main/teammate/historyStore';
+import { chatgptUrl } from '../../../src/shared/teammate/dispatch';
 import type { Crypto } from '../../../src/main/teammate/secrets';
 import type { PingId } from '../../../src/shared/pings';
 
@@ -29,6 +30,33 @@ const entry = (line: string, words: string | null = null) => ({
 const DAY = 86_400_000;
 
 describe('HistoryStore', () => {
+  it('keeps a chatgpt.com link and drops a random https url', async () => {
+    const d = join(root(), 'history');
+    const store = new HistoryStore(d, fakeCrypto(), () => 1000);
+    const url = chatgptUrl('Translate this paragraph.', false);
+    const kept = await store.append(null, entry('opened'), { ...meta, codex: { url, dirId: 'ask-1' } });
+    expect((await store.get(kept.id))?.codex?.url).toBe(url);
+    expect((await store.list()).find((t) => t.id === kept.id)?.link).toBe('chatgpt');
+
+    const dropped = await store.append(null, entry('nope'), {
+      ...meta, codex: { url: 'https://example.com/?q=secret', dirId: 'ask-2' },
+    });
+    expect((await store.get(dropped.id))?.codex).toBeUndefined();
+
+    const poisoned = {
+      id: 'poisoned1', title: 'Poison', started: 1, lastActivity: 1, app: 'League', windowTitle: 'x',
+      profile: 'p1', entries: [entry('still here')],
+      codex: { url: 'https://evil.example/?q=1', dirId: 'ask-3' },
+    };
+    const bytes = fakeCrypto().encryptString(JSON.stringify(poisoned));
+    writeFileSync(join(d, 'poisoned1.thread'), bytes);
+    const restarted = new HistoryStore(d, fakeCrypto(), () => 2000);
+    const read = await restarted.get('poisoned1');
+    expect(read?.entries[0]?.line).toBe('still here');
+    expect(read?.codex).toBeUndefined();
+    expect((await restarted.list()).find((t) => t.id === 'poisoned1')?.link).toBeUndefined();
+  });
+
   it('appends and reads a thread back', async () => {
     const store = new HistoryStore(join(root(), 'history'), fakeCrypto(), () => 1000);
     const first = await store.append(null, entry('go left'), meta);

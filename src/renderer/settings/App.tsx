@@ -55,6 +55,7 @@ const ENTRANCE_MS = 900;
 
 /** Pings that aren't in League's default wheel layout get a "new" badge. */
 const NEW_PINGS = new Set<PingId>(['bait', 'visioncleared', 'missingflip']);
+const WHEEL_PINGS = ALL_PINGS;
 
 /** The settings change for a ping wheel edit: only the fields it touches, since an undefined field would reset that setting. */
 function pingPatch(p: WheelPatch<PingId>): Partial<Settings> {
@@ -110,7 +111,7 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
   const askKey = separateAskKey(s); // the key pickers can't take it; main refuses it too
   const mouseTrigger = s.trigger === 'mouse4' || s.trigger === 'mouse5';
   const customTrigger = typeof s.trigger === 'object';
-  const pingPool: PoolItem<PingId>[] = ALL_PINGS.map((p) => ({
+  const pingPool: PoolItem<PingId>[] = WHEEL_PINGS.map((p) => ({
     id: p.id, icon: textureUrl(p.icon), name: t.pingNames[p.id], badge: NEW_PINGS.has(p.id) ? t.wheelNew : undefined,
   }));
 

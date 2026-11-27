@@ -4,11 +4,12 @@ import { useEffect, useState } from 'react';
 import type { CheckAgentResult } from '../../../shared/ipc';
 import { agentNotes, timeoutMinutes, timeoutSeconds, withFolder } from '../../../shared/teammate/agentProfiles';
 import { AGENT_PRESETS } from '../../../shared/teammate/agents';
+import { dispatchOf, presetCanDispatch } from '../../../shared/teammate/dispatch';
 import type { AgentProfile } from '../../../shared/teammate/settings';
 import { api } from '../api';
 import { useText } from '../text';
 import { DraftInput, Swatches } from './mateFields';
-import { ExpanderRow } from './rows';
+import { ExpanderRow, OnOffSwitch } from './rows';
 
 /** One argument per line; empty lines at the end are the textarea's trailing line break, not arguments. */
 function linesOf(text: string): string[] {
@@ -129,6 +130,28 @@ function AgentNotes({ p }: { p: AgentProfile }) {
   );
 }
 
+/** Open in Codex desktop: off until the user turns it on. The working folder is the profile's project folder. */
+function DispatchRows({ p, onChange }: { p: AgentProfile; onChange(patch: Partial<AgentProfile>): void }) {
+  const t = useText();
+  const m = t.teammate.settings;
+  const d = dispatchOf(p);
+  const folder = p.folder.kind === 'fixed' ? p.folder.path : p.folder.folders.join('\n');
+  return (
+    <>
+      <span>{m.dispatchTitle}</span>
+      <div className="mateStack">
+        <OnOffSwitch checked={d.on} label={m.dispatchTitle} onChange={(on) => onChange({ dispatch: { on } })} />
+        <span className="desc">{m.dispatchDesc}</span>
+      </div>
+      <span>{m.dispatchFolder}</span>
+      <div className="mateStack">
+        <span className={folder ? 'matePath' : 'desc'} style={{ whiteSpace: 'pre-wrap' }}>{folder || m.agentFolderNone}</span>
+        <span className="desc">{m.dispatchFolderDesc}</span>
+      </div>
+    </>
+  );
+}
+
 /** A coding agent's profile: the command, where it runs, how long it may take, and what to know about it. */
 export function AgentProfileCard({ p, open, onChange, onRemove }: {
   p: AgentProfile; open: boolean; onChange(patch: Partial<AgentProfile>): void; onRemove(): void;
@@ -195,6 +218,7 @@ export function AgentProfileCard({ p, open, onChange, onRemove }: {
               }} />
             <span className="desc">{m.agentTimeoutUnit}</span>
           </div>
+          {presetCanDispatch(p.preset) ? <DispatchRows p={p} onChange={onChange} /> : null}
         </div>
         <AgentNotes p={p} />
         <div className="mateRow mateNote">

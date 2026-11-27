@@ -3,7 +3,7 @@ import {
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,7 @@ import type { Spot } from '../shared/teammate/askMachine';
 import { rememberApp } from '../shared/teammate/appRules';
 import type { ThreadRecord } from '../shared/teammate/history';
 import { openInRows, resumableProfile, resumeArgs } from '../shared/teammate/agentProfiles';
+import { isChatgptUrl, isDispatchUrl } from '../shared/teammate/dispatch';
 import { wordsContinuesByDefault } from '../shared/teammate/threads';
 import type { HistoryState, MateAction, MateView } from '../shared/teammateIpc';
 import { parseTextInput } from '../shared/textCommands';
@@ -35,6 +36,7 @@ import { EmoteCache } from './emoteCache';
 import { EmoteLibrary, resolveEmoteArt } from './emoteLibrary';
 import { EmoteTransfer } from './emoteTransfer';
 import { isFile } from './fileState';
+import { resolveInside } from './safePath';
 import { InputBridge } from './inputBridge';
 import { LanTransport } from './lanTransport';
 import { RELAYS } from './relays';
@@ -59,6 +61,7 @@ import { findExecutable, userPath, withPath } from './teammate/agents/command';
 import { launchTerminal } from './teammate/agents/openInTerminal';
 import { AgentRunner, isExecutable, killProcessTree, searchPath } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
+import { createSnipaste, liveSnipaste, pngFromClipboardItems, writeClipboardSnap } from './teammate/snipastePaste';
 import { AskGesture } from './teammate/askGesture';
 import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
@@ -813,10 +816,26 @@ function start(): void {
         // A failure is told in the list, which is made again either way.
         await openInAgent(await m.history.get(a.id));
         return refreshHistory(m);
-      case 'delete':
+      case 'openCodex': {
+        const record = await m.history.get(a.id);
+        const url = record?.codex?.url;
+        if (url && isDispatchUrl(url)) {
+          const opened = await shell.openExternal(url).then(() => true, () => false);
+          if (!opened) historyOpenFailed = isChatgptUrl(url) ? 'chatgpt' : 'codex-desktop';
+        }
+        return refreshHistory(m);
+      }
+      case 'delete': {
+        const record = await m.history.get(a.id);
+        const dirId = record?.codex?.dirId;
+        if (dirId) {
+          const dir = resolveInside(join(app.getPath('userData'), 'codex-signals'), dirId);
+          if (dir) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+        }
         await m.history.delete(a.id);
         m.controller.forgetThread(a.id);
         return refreshHistory(m);
+      }
       case 'search':
         historyQuery = a.query;
         return refreshHistory(m);
@@ -932,7 +951,28 @@ function start(): void {
         env: userEnv,
         home: () => app.getPath('home'),
         platform: PLATFORM,
+        openTerminal: async ({ cwd, command, args, extraEnv }) => {
+          const env: NodeJS.ProcessEnv = { ...await userEnv(), ...extraEnv };
+          // The same as the headless runner: an Electron switch must not follow Codex into the terminal.
+          delete env.ELECTRON_RUN_AS_NODE;
+          const file = findExecutable(command, searchPath(env, PLATFORM), PLATFORM, isExecutable);
+          return file !== null && isDirectory(cwd)
+            && launchTerminal({ spawn, platform: PLATFORM, cwd, file, args, env });
+        },
+        openDesktop: (url) => shell.openExternal(url).then(() => true, () => false),
+        snip: createSnipaste(liveSnipaste({
+          platform: PLATFORM,
+          readImage: async () => pngFromClipboardItems(await clipboard.read(), (bytes) => {
+            const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+            return image.isEmpty() ? null : new Uint8Array(image.toPNG());
+          }),
+          readText: () => clipboard.readText(),
+          restore: (prior) => writeClipboardSnap(prior, clipboard, ClipboardItem),
+          exists: existsSync,
+          env: process.env,
+        })),
       },
+      recordsDir: () => join(userData, 'codex-signals'),
       settings: () => settings,
       lang: mateLang,
       secrets,

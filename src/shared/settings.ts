@@ -416,6 +416,8 @@ export type OverlaySettings = Pick<
   /** The ask wheel: the teammate's name tag, each slice's intent label, and the slices whose intent is off. */
   ask: {
     tag: PingTag; labels: Partial<Record<PingId, string>>; disabled: PingId[];
+    /** The slices the ask wheel draws. The same pings as the ping wheel. */
+    wheel: PingId[];
     /** The ask key is the ping key: the ping wheel asks, and a ping click opens the words box while `click` is on. */
     onPing: boolean;
     click: boolean;
@@ -436,15 +438,16 @@ export const overlaySettings = (s: Settings, lang: Lang = 'en'): OverlaySettings
 
 function askWheel(s: Settings, lang: Lang): OverlaySettings['ask'] {
   const t = s.teammate;
+  const wheel = [...s.wheel];
   const labels: Partial<Record<PingId, string>> = {};
   const disabled: PingId[] = [];
-  for (const id of s.wheel) {
+  for (const id of wheel) {
     const intent = intentFor(t, id, lang);
     labels[id] = intent.label;
     if (!intent.enabled) disabled.push(id);
   }
   return {
-    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled,
+    tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, labels, disabled, wheel,
     onPing: asksOnPing(s), click: t.askClick,
   };
 }

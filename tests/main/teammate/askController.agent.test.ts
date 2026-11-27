@@ -198,6 +198,7 @@ function harness(opts: Options = {}) {
       write: async (p, text) => void written.set(p, text),
       makeDir: async () => undefined,
       removeDir: async () => undefined,
+      copy: async () => undefined,
     },
     actions,
     ...(opts.noAgents ? {} : { agents }),

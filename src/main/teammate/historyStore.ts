@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isPingId, type PingId } from '../../shared/pings';
+import { isChatgptUrl, isDispatchUrl } from '../../shared/teammate/dispatch';
 import { isSessionId, prune, spotCount, type ThreadRecord } from '../../shared/teammate/history';
 import { renameWithRetry } from '../settingsStore';
 import type { Crypto } from './secrets';
@@ -17,6 +18,10 @@ export interface ThreadSummary {
   intents: PingId[];
   /** The agent profile whose session the thread continues, for the History window's Open in button. */
   agent?: string;
+  /** History can open this signal's link again. */
+  codex?: boolean;
+  /** Which link that button reopens. */
+  link?: 'codex' | 'chatgpt';
 }
 
 export interface HistoryOptions {
@@ -37,15 +42,30 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && Number.is
 function parseEntry(raw: unknown): Entry | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const x = raw as Record<string, unknown>;
-  if (!isNumber(x.at) || !isPingId(x.intent) || !(x.words === null || isString(x.words))) return null;
+  // A thread saved by the earlier dispatch slice used an intent id that is no longer a ping. Keep the thread.
+  const intent = x.intent === 'dispatch' ? 'generic' : x.intent;
+  if (!isNumber(x.at) || !isPingId(intent) || !(x.words === null || isString(x.words))) return null;
   if (!isString(x.line) || !isString(x.markdown) || !isString(x.thumb)) return null;
   // Entries written before actions existed have no `done`.
   if (x.done !== undefined && !(Array.isArray(x.done) && x.done.every(isString))) return null;
   const e: Entry = {
-    at: x.at, intent: x.intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb,
+    at: x.at, intent, words: x.words, line: x.line, markdown: x.markdown, thumb: x.thumb,
     spots: spotCount(x.spots),
   };
   return Array.isArray(x.done) ? { ...e, done: x.done as string[] } : e;
+}
+
+/** A link this app stored. A random https URL is dropped; the thread itself still loads. */
+function parseCodex(raw: unknown): NonNullable<ThreadRecord['codex']> | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const c = raw as Record<string, unknown>;
+  if (!isString(c.url) || !isDispatchUrl(c.url)) return null;
+  if (!isString(c.dirId) || !ID_RE.test(c.dirId)) return null;
+  return { url: c.url, dirId: c.dirId };
+}
+
+function linkOf(url: string): 'codex' | 'chatgpt' {
+  return isChatgptUrl(url) ? 'chatgpt' : 'codex';
 }
 
 /** Threads written before agents have none; a malformed one is dropped, as the session can't be resumed. */
@@ -73,6 +93,7 @@ function parseThread(text: string): ThreadRecord | null {
       entries.push(entry);
     }
     const agent = parseAgent(r.agent);
+    const codex = parseCodex(r.codex);
     return {
       id: r.id,
       title: r.title,
@@ -82,6 +103,7 @@ function parseThread(text: string): ThreadRecord | null {
       windowTitle: r.windowTitle,
       profile: r.profile,
       ...(agent ? { agent } : {}),
+      ...(codex ? { codex } : {}),
       entries,
     };
   } catch {
@@ -101,6 +123,7 @@ const rowOf = (t: ThreadRecord): IndexRow => ({
   app: t.app,
   intents: t.entries.map((e) => e.intent),
   ...(t.agent ? { agent: t.agent.profileId } : {}),
+  ...(t.codex ? { codex: true, link: linkOf(t.codex.url) } : {}),
   searchText: [t.title, ...t.entries.flatMap((e) => [e.line, e.words ?? ''])].join(' ').toLowerCase(),
 });
 
@@ -153,19 +176,27 @@ export class HistoryStore {
   append(
     threadId: string | null,
     entry: Entry,
-    meta: { title: string; app: string; windowTitle: string; profile: string; agent?: AgentSession },
+    meta: {
+      title: string; app: string; windowTitle: string; profile: string;
+      agent?: AgentSession; codex?: NonNullable<ThreadRecord['codex']>;
+    },
   ): Promise<ThreadRecord> {
     // Read, build and write in one queued job so overlapping appends to a thread can't drop each other's entry.
     return this.enqueue(async () => {
       const writable = this.writable();
       const existing = writable && threadId !== null ? await this.read(threadId) : null;
       const at = this.now();
+      const codex = meta.codex && isDispatchUrl(meta.codex.url) ? meta.codex : undefined;
       const record: ThreadRecord = existing
         ? {
             ...existing, lastActivity: at, entries: [...existing.entries, entry],
             ...(meta.agent ? { agent: meta.agent } : {}),
+            ...(codex ? { codex } : {}),
           }
-        : { id: randomUUID(), ...meta, started: at, lastActivity: at, entries: [entry] };
+        : {
+            id: randomUUID(), ...meta, ...(codex ? { codex } : { codex: undefined }),
+            started: at, lastActivity: at, entries: [entry],
+          };
       if (!writable) return record;
       await this.write(record);
       this.index.set(record.id, rowOf(record));

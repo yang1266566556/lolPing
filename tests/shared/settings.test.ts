@@ -599,6 +599,7 @@ describe('helpers', () => {
           needvision: 'Look it up', missing: 'Explain', enemyvision: 'Grab',
         },
         disabled: [],
+        wheel: ['danger', 'push', 'omw', 'allin', 'assist', 'needvision', 'missing', 'enemyvision'],
         onPing: false,
         click: true,
       },

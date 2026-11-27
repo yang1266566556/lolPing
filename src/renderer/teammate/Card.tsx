@@ -67,6 +67,9 @@ const useStyles = makeStyles({
   /** The bubble's line leads its answer. */
   lead: { display: 'block', marginBottom: '4px' },
   buttons: { display: 'flex', flexWrap: 'wrap', columnGap: '4px', rowGap: '4px', paddingRight: '6px' },
+  /** Pre-written prompts. They wrap onto more rows instead of shrinking. */
+  prompts: { display: 'flex', flexWrap: 'wrap', columnGap: '4px', rowGap: '4px', paddingRight: '6px' },
+  prompt: { flexShrink: 0, maxWidth: '100%', whiteSpace: 'normal', height: 'auto', minHeight: '24px' },
   reply: { marginRight: '6px' },
   footer: { color: tokens.colorNeutralForeground3, paddingRight: '6px' },
 });
@@ -296,7 +299,23 @@ export function Card({ s, t, act, leaving }: { s: CardState; t: Ui; act: (a: Mat
           })}
         </div>
         {/* The put button is last: its arrival moves none of the others from under the pointer. */}
-        <div className={st.buttons}>{cardButtons(put, s.answerOnly).map(button)}</div>
+        <div className={st.buttons}>
+          {s.follow ? (
+            <Button size="small" appearance="primary" onClick={() => act({ t: 'follow' })}>
+              {s.follow === 'chatgpt' ? t.openChatgpt : t.openCodex}
+            </Button>
+          ) : null}
+          {cardButtons(put, s.answerOnly).map(button)}
+        </div>
+        {s.prompts && s.prompts.length > 0 && (
+          <div className={st.prompts}>
+            {s.prompts.map((id) => (
+              <Button key={id} className={st.prompt} size="small" onClick={() => act({ t: 'preset', id })}>
+                {t.prompts[id].label}
+              </Button>
+            ))}
+          </div>
+        )}
         {!s.answerOnly && <Input
           className={st.reply}
           size="small"

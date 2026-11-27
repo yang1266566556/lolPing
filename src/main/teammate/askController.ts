@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { strings, type Lang } from '../../shared/i18n';
 import type { PingTag } from '../../shared/ipc';
@@ -8,6 +8,11 @@ import type { Platform } from '../../shared/platform';
 import { sanitizeName } from '../../shared/roomProtocol';
 import type { Settings } from '../../shared/settings';
 import { AGENT_PRESETS, agentPrompt, presetForClient, type AgentRunSpec } from '../../shared/teammate/agents';
+import {
+  absoluteFolder, chatgptLink, codexDesktopPrompt, codexDesktopUrl, desktopPings, dispatchProfile,
+  isChatgptUrl, isDispatchUrl, savedSpotSummary, savedSpotTitle, signalRoute,
+  waitingPrompts, type CodexPromptId, type PingLine,
+} from '../../shared/teammate/dispatch';
 import { AskMachine, type AskFailure, type Spot } from '../../shared/teammate/askMachine';
 import type { BridgeContent } from '../../shared/teammate/bridgeProtocol';
 import type { SystemTextLayer } from '../../shared/teammate/contextProtocol';
@@ -19,6 +24,7 @@ import { isSessionId, type ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
+import { pasteShotOn } from '../../shared/teammate/snipaste';
 import { needsKey } from '../../shared/teammate/providers';
 import { route, type RouteReason } from '../../shared/teammate/router';
 import {
@@ -32,6 +38,7 @@ import {
 import type { BubbleState, CardState, MateAction, MateView, PutState } from '../../shared/teammateIpc';
 import type { BridgeHandler } from '../mcp/bridgeServer';
 import type { OverlayManager } from '../overlayManager';
+import { resolveInside } from '../safePath';
 import { RateLimiter } from '../rateLimiter';
 import type { ActionRunner, RunInfo } from './actions';
 import { AgentStartError, type AgentRun, type AgentRunner } from './agents/runner';
@@ -86,6 +93,7 @@ export interface AskDeps {
     write(path: string, text: string): Promise<void>;
     makeDir(path: string): Promise<void>;
     removeDir(path: string): Promise<void>;
+    copy(from: string, to: string): Promise<void>;
   };
   /** Runs agent profiles; without it an agent ask fails as when lolPing's end of the bridge couldn't open. */
   agents?: {
@@ -98,7 +106,24 @@ export interface AskDeps {
     home: () => string;
     /** For the editor's window title, whose separator differs on macOS. */
     platform: Platform;
+    /** Opens a terminal in `cwd` running `command` with `args`. False when it can't. */
+    openTerminal?(o: {
+      cwd: string; command: string; args: readonly string[]; extraEnv?: Record<string, string>;
+    }): Promise<boolean>;
+    /** Opens a codex:// link in the desktop app. False when the handler isn't there. Never starts a terminal. */
+    openDesktop?(url: string): Promise<boolean>;
+    /**
+     * Windows: F1 for the user's Snipaste hotkey, then paste the new clipboard image. Absent on macOS.
+     * The image stays on the clipboard. Nothing here writes it to a file.
+     */
+    snip?: {
+      capture(cancelled: () => boolean): Promise<'image' | 'text'>;
+      paste(): Promise<boolean>;
+      release(): void;
+    };
   };
+  /** Folder that keeps a signal's screenshots after the ask's temp folder is deleted. */
+  recordsDir?: () => string;
 }
 
 /** Spec §7.1, §9.5: tool rounds per answer, the gap between a set of pings, and "the same spot". */
@@ -142,6 +167,8 @@ const ALL_VISITORS = '*';
 /** An agent's error goes on the line cut to this many characters. */
 const AGENT_ERROR_MAX = 200;
 const ASK_SECRET_BYTES = 16;
+/** A dispatch bubble has a button on it, so it stays longer than a line the user only reads. */
+const DISPATCH_BUBBLE_MS = 30_000;
 
 interface Run {
   machine: AskMachine;
@@ -217,6 +244,16 @@ interface Run {
   stale: boolean;
   /** Its bubble went with the stale fade (or its line hadn't come yet): a later say brings the line back, once. */
   bubbleBack: boolean;
+  /** Dispatch leaves the ask folder: Codex reads task.md after the ask has ended. */
+  keepDir: boolean;
+  /** The bubble and card button that opens the saved link again. */
+  follow: 'codex' | 'chatgpt' | null;
+  /** The link and the screenshot folder, stored with the thread. */
+  codexLink: { url: string; dirId: string } | null;
+  /** Chips on the card. Only On My Way, while it is still waiting, has them. */
+  prompts: readonly CodexPromptId[] | null;
+  /** Save for later's title, taken from the window or the text. The history row uses it. */
+  recordTitle: string | null;
 }
 
 /** What an ask is read for: its spots, the last one, its intent, display, language and folder. */
@@ -383,6 +420,7 @@ export class AskController extends EventEmitter {
   private bubbleTimer: Timer | null = null;
   private bubbleEndsAt = 0;
   private fadeTimer: Timer | null = null;
+  /** Pings still waiting out the gap between a set. Cleared when the page under them moves. */
   private readonly pingTimers = new Set<Timer>();
   /** The run the stale watch is on, from its first mark or bubble until both are gone. */
   private watched: Run | null = null;
@@ -394,6 +432,23 @@ export class AskController extends EventEmitter {
   private thread: ThreadRecord | null = null;
   /** A thread opened from History that the card shows; its reply box continues it. */
   private viewed: ThreadRecord | null = null;
+  /** A chip tapped on the waiting card. The next desktop reply uses its instruction; a typed reply leaves this null. */
+  private pendingPrompt: CodexPromptId | null = null;
+  /** A signal that is waiting. Codex waits for On My Way; ChatGPT waits for a Generic question, with no chips. */
+  private codexWait: {
+    kind: 'codex' | 'chatgpt';
+    threadId: string;
+    dirId: string;
+    overviewPath: string;
+    zoomPaths: string[];
+    recordPath: string;
+    app: string;
+    title: string;
+    selection: string;
+    text: string;
+    folder: string;
+    conversation: PingLine[];
+  } | null = null;
   /** The last answer's history entry: an action done after it was written (after consent) is added to it. */
   private entry: { ask: string; at: number; thread: Promise<string | null> } | null = null;
   /** The runner's put button for the answer on screen: the bubble and the card show it. */
@@ -419,6 +474,7 @@ export class AskController extends EventEmitter {
         await mkdir(p, { recursive: true });
       },
       removeDir: (p) => rm(p, { recursive: true, force: true }),
+      copy: (from, to) => copyFile(from, to),
     };
     deps.actions?.on('described', (ask: string, done: string[]) => this.amendDone(ask, done));
     deps.actions?.on('put', (state: PutState) => this.showPut(state));
@@ -471,6 +527,7 @@ export class AskController extends EventEmitter {
       calls: [], early: [], pings: 0, marks: [], dir: reading?.dir ?? join(this.deps.tempDir(), machine.id), reading,
       screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0,
       system: null, fields: [], box: null, info: null, stale: false, bubbleBack: false,
+      keepDir: false, follow: null, codexLink: null, prompts: null, recordTitle: null,
     };
     this.run = run;
     this.shown = run;
@@ -520,6 +577,7 @@ export class AskController extends EventEmitter {
   forgetThread(id?: string): void {
     if (id === undefined || this.thread?.id === id) this.thread = null;
     if (id === undefined || this.viewed?.id === id) this.viewed = null;
+    if (id === undefined || this.codexWait?.threadId === id) this.codexWait = null;
   }
 
   /** History's Continue: the next push, reply or words go into this thread. */
@@ -536,6 +594,9 @@ export class AskController extends EventEmitter {
       view: 'card', lang, tag: { name: t.tagName, color: t.tagColor, rgb: t.tagColorCustom }, title: record.title,
       entries: this.threadEntries(record, lang, t.tagName), streaming: false,
       footer: { profile: record.profile, model: '', route: '', tokens: null, used: [] }, put: null,
+      ...(record.codex && isDispatchUrl(record.codex.url)
+        ? { follow: isChatgptUrl(record.codex.url) ? 'chatgpt' as const : 'codex' as const }
+        : {}),
     });
     this.cardShown = true;
     this.viewed = record;
@@ -576,12 +637,23 @@ export class AskController extends EventEmitter {
       case 'reply':
         if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'generic' }], { text: a.text, newThread: false });
         break;
+      case 'preset':
+        // A chip is a reply on this signal. The short label is what the thread shows; the long instruction goes to Codex.
+        if (run && !run.visitor && this.codexWait?.kind === 'codex' && this.thread?.id === this.codexWait.threadId) {
+          this.pendingPrompt = a.id;
+          const label = strings(run.lang).teammate.ui.prompts[a.id].label;
+          this.ask([{ ...run.spot, intent: 'generic' }], { text: label, newThread: false });
+        }
+        break;
       case 'deep':
         if (run && !run.visitor) this.ask([{ ...run.spot, intent: 'allin' }]);
         break;
       case 'put':
         // The click is the consent; the runner checks it belongs to the action it has for this ask.
         if (run?.info && (view === 'bubble' || view === 'card')) void this.deps.actions?.put(run.info, view);
+        break;
+      case 'follow':
+        void this.openCodexAgain(run);
         break;
       default:
         break;
@@ -771,6 +843,7 @@ export class AskController extends EventEmitter {
       text: '', line: '', said: '', rest: '', markdown: [], tokens: null, calls: [], early: [], pings: 0, marks: [],
       dir: '', reading: null, screenMarks: [], doc: null, used: [], skipped: false, fileRead: 0, system: null, fields: [],
       box: null, info: null, stale: false, bubbleBack: false,
+      keepDir: false, follow: null, codexLink: null, prompts: null, recordTitle: null,
     };
   }
 
@@ -786,7 +859,8 @@ export class AskController extends EventEmitter {
     } finally {
       // Also when the ask was cancelled mid-capture: context-helper may still write into the folder, and fails once
       // it is gone. Whatever slips past that is removed with the whole temp folder when the teammate stops or starts.
-      this.files.removeDir(run.dir).catch(() => undefined);
+      // The signal's screenshots are copied out before this. The temp root still goes when the teammate starts or stops.
+      if (!run.keepDir) this.files.removeDir(run.dir).catch(() => undefined);
     }
   }
 
@@ -802,6 +876,8 @@ export class AskController extends EventEmitter {
     run.app = front.app;
     run.title = front.title;
     run.window = front.window;
+    if (dispatchProfile(this.deps.settings().teammate.profiles)) return this.desktopAsk(run, reading);
+    this.pendingPrompt = null;
     if (front.profile && !isBuiltin(front.profile)) return this.askAgent(run, front.profile, front.route, reading);
     const profile = front.profile && isBuiltin(front.profile) ? front.profile : null;
     const { key } = front;
@@ -951,6 +1027,320 @@ export class AskController extends EventEmitter {
       instructions: deps.secrets.instructions(), emotes: run.emotes, marks: layers.marks, system: layers.system,
       file: layers.file, fields: layers.fields,
     };
+  }
+
+  /** Opens the saved Codex or ChatGPT link again. A failed handler says so. It never falls back to a terminal. */
+  private async openCodexAgain(run: Run | null): Promise<void> {
+    const saved = run?.codexLink?.url ?? this.viewed?.codex?.url ?? null;
+    const open = this.deps.agents?.openDesktop;
+    if (!saved || !isDispatchUrl(saved) || !open) return;
+    const ok = await open(saved);
+    if (ok || !run) return;
+    const ui = strings(run.lang).teammate.ui;
+    run.line = isChatgptUrl(saved) ? ui.webMissing : ui.desktopMissing;
+    run.said = run.line;
+    this.showLine(run, run.line);
+    this.showRecord(run);
+  }
+
+  /** The bubble and the record card. The card stays, so the screenshots and the ping thread don't vanish with the bubble. */
+  private showRecord(run: Run): void {
+    this.deps.overlay.mateSaid();
+    this.showLine(run, run.line);
+    const at = this.popupAt(run);
+    this.deps.windows.showCard({ x: at.x, y: at.y + 96 }, this.cardState(run, false));
+    this.cardShown = true;
+    this.clearTimer('fade');
+  }
+
+  /** A League ping at the signal, with its own art and sound. `keep` holds it until the marks are cleared. */
+  private signalPing(run: Run, id: 'generic' | 'omw', line: string): void {
+    if (run.stale) return;
+    const at = this.deps.overlay.toLocal(run.spots[0]?.phys ?? run.receipt);
+    if (!at) return;
+    this.deps.overlay.spawnMate({ ...at, id, keep: true, tag: run.tag, label: line });
+    this.marksShown = true;
+    this.watchShown(run);
+  }
+
+  /** The question ping now, and On My Way after a short gap. The gap timer is not an ask deadline. */
+  private playSignalPings(run: Run, pings: { id: 'generic' | 'omw'; line: string }[]): void {
+    pings.forEach((ping, i) => {
+      const fire = (): void => this.signalPing(run, ping.id, ping.line);
+      if (i === 0) fire();
+      else this.timer(i * PING_GAP_MS, fire);
+    });
+  }
+
+  /**
+   * Copies the screenshots out of the ask's temp folder, which is deleted when the ask ends, and writes the local
+   * record. `note` is what was handed off, or the save itself. ChatGPT is not told to read this file.
+   */
+  private async saveSignal(
+    run: Run,
+    scene: { cap: { overviewPath: string; zooms: { path: string }[] } },
+    note: string,
+  ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string } | null> {
+    const dirId = run.machine.id;
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(dirId)) return null;
+    const root = this.deps.recordsDir?.() ?? join(this.deps.tempDir(), 'codex-signals');
+    const dir = resolveInside(root, dirId);
+    if (!dir) return null;
+    await this.files.makeDir(dir);
+    const overviewPath = join(dir, 'overview.jpg');
+    await this.files.copy(scene.cap.overviewPath, overviewPath);
+    const zoomPaths: string[] = [];
+    for (let i = 0; i < scene.cap.zooms.length; i += 1) {
+      const zoom = scene.cap.zooms[i];
+      if (!zoom) continue;
+      const to = join(dir, `zoom-${i + 1}.jpg`);
+      await this.files.copy(zoom.path, to);
+      zoomPaths.push(to);
+    }
+    const recordPath = join(dir, 'signal.md');
+    await this.files.write(recordPath, note);
+    return { dirId, overviewPath, zoomPaths, recordPath };
+  }
+
+  /** A reply stays on the first signal's screenshots. The record file is rewritten with the new handoff. */
+  private async rewriteSignal(
+    held: NonNullable<AskController['codexWait']>,
+    note: string,
+  ): Promise<{ dirId: string; overviewPath: string; zoomPaths: string[]; recordPath: string }> {
+    await this.files.write(held.recordPath, note);
+    return {
+      dirId: held.dirId, overviewPath: held.overviewPath, zoomPaths: held.zoomPaths, recordPath: held.recordPath,
+    };
+  }
+
+  /** The thread so far, for Push. Other signals do not send it. */
+  private earlierLines(run: Run): PingLine[] {
+    if (run.intent.def.id !== 'push' || !run.thread) return [];
+    const lines: PingLine[] = [];
+    for (const entry of run.thread.entries) {
+      if (entry.words) lines.push({ who: 'user', ping: entry.intent, text: entry.words });
+      if (entry.line) lines.push({ who: 'teammate', ping: entry.intent, text: entry.line });
+    }
+    return lines;
+  }
+
+  /**
+   * The main ask, when Open in Codex desktop is on. On My Way still opens Codex desktop. Bait is saved here.
+   * The other signals open chatgpt.com. The in-app teammate is not used on this path.
+   */
+  private async desktopAsk(run: Run, reading: Reading): Promise<void> {
+    const { agents } = this.deps;
+    const words = strings(run.lang).teammate.ask;
+    const ui = strings(run.lang).teammate.ui;
+    const same = this.codexWait !== null && run.thread?.id === this.codexWait.threadId;
+    const waiting = same && this.codexWait ? this.codexWait.kind : null;
+    const route = signalRoute({ ping: run.intent.def.id, words: run.words, waiting });
+    const chosen = route.to === 'codex' && route.reply ? this.pendingPrompt : null;
+    this.pendingPrompt = null;
+    const profile = dispatchProfile(this.deps.settings().teammate.profiles);
+    for (const d of run.deadlines) clearTimeout(d);
+    run.deadlines = [];
+    if (!profile || !agents?.openDesktop) return this.fail(run, 'noProfile', words.agent.noBridge);
+    run.profile = profile;
+    run.route = words.desktopRoute;
+    if (!run.display) return this.fail(run, 'capture');
+    run.machine.startGathering();
+
+    const scene = await reading.scene();
+    if (!scene || !this.alive(run)) return;
+    const ctx = this.useScene(run, scene);
+    const folder = agentFolder(profile, { app: run.app, title: run.title }, agents, run.lang);
+    run.cwd = folder.path;
+    run.folder = folder.label;
+    const focus = ctx.system?.focus;
+    const focusText = focus && !focus.secure && focus.value !== '' ? `${focus.label}: ${focus.value}` : '';
+    const spotText = [focusText, ...(ctx.system?.spotTexts ?? [])].filter((s) => s.trim() !== '').join('\n');
+    const selection = ctx.system?.selection ?? '';
+    const reply = 'reply' in route && route.reply;
+    const held = reply && this.codexWait ? this.codexWait : null;
+    const page = {
+      app: held?.app ?? run.app,
+      title: held?.title ?? run.title,
+      selection: held?.selection ?? selection,
+      text: held?.text ?? spotText,
+      folder: held?.folder ?? folder.path,
+    };
+    const userText = run.words?.trim() || run.intent.label;
+    const conversation: PingLine[] = [
+      ...(held?.conversation ?? []),
+      { who: 'user', ping: run.intent.def.id, text: userText },
+    ];
+    const names = strings(run.lang).pingNames;
+
+    if (route.to === 'save') {
+      const title = savedSpotTitle({ windowTitle: page.title, selection: page.selection, text: page.text })
+        || run.intent.label;
+      const summary = savedSpotSummary(page.selection, page.text);
+      const from = [page.app, page.title].filter((s) => s.trim() !== '').join(ui.sep);
+      run.recordTitle = title;
+      run.line = ui.savedSpot;
+      run.said = ui.savedSpot;
+      run.prompts = null;
+      run.follow = null;
+      run.codexLink = null;
+      run.markdown = [[
+        `${ui.savedTitleLabel}${ui.labelSep}${title}`,
+        ...(summary ? [`${ui.savedSummaryLabel}${ui.labelSep}${summary}`] : []),
+        ...(from ? [`${ui.savedFromLabel}${ui.labelSep}${from}`] : []),
+      ].join('\n')];
+      const saved = await this.saveSignal(run, scene, run.markdown[0] ?? title);
+      if (!saved || !this.alive(run)) return;
+      run.machine.sent();
+      if (!run.machine.received()) return;
+      this.showRecord(run);
+      await this.finish(run);
+      if (this.codexWait?.threadId === this.thread?.id) this.codexWait = null;
+      return;
+    }
+
+    const codexStep = route.to === 'codex' || (route.to === 'ask' && route.for === 'codex')
+      ? desktopPings({ words: run.words, replying: route.to === 'codex' && route.reply })
+      : null;
+    if (codexStep) {
+      for (const ping of codexStep.pings) conversation.push({ who: 'teammate', ping: ping.id, text: ui[ping.line] });
+    } else if (route.to === 'ask') {
+      conversation.push({ who: 'teammate', ping: 'generic', text: ui.askQuestion });
+    }
+    const chip = chosen ? ui.prompts[chosen].body : undefined;
+    const openingCodex = codexStep?.open === true;
+    const openingWeb = route.to === 'chatgpt';
+    const web = chatgptLink({
+      instruction: run.intent.instruction,
+      words: run.words,
+      framing: ui.webFraming,
+      app: page.app, title: page.title, selection: page.selection, text: page.text,
+      conversation, earlier: this.earlierLines(run),
+      search: run.intent.def.id === 'needvision',
+    });
+    const saved = held
+      ? await this.rewriteSignal(held, web.prompt)
+      : await this.saveSignal(run, scene, web.prompt);
+    if (!saved || !this.alive(run)) return;
+    // Codex is told where the screenshots are. ChatGPT only gets the page as text, which is already in web.prompt.
+    const prompt = openingWeb ? web.prompt : codexDesktopPrompt({
+      overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths, recordPath: saved.recordPath,
+      app: page.app, title: page.title, selection: page.selection, text: page.text, folder: page.folder,
+      conversation, ...(chip ? { instruction: chip } : {}),
+    });
+    if (!openingWeb) await this.files.write(saved.recordPath, prompt);
+    const url = openingWeb ? web.url : codexDesktopUrl(prompt, absoluteFolder(page.folder));
+    const openNow = openingCodex || openingWeb;
+    run.codexLink = openNow ? { url, dirId: saved.dirId } : null;
+    run.follow = openingWeb ? 'chatgpt' : openingCodex ? 'codex' : null;
+    run.prompts = waitingPrompts(route.to === 'ask' && route.for === 'codex');
+    if (openingWeb) {
+      run.line = ui.openedWeb;
+      run.markdown = [run.intent.instruction, ...(run.words?.trim() ? [run.words.trim()] : [])];
+    } else if (codexStep) {
+      const lastPing = codexStep.pings[codexStep.pings.length - 1];
+      if (!lastPing) return;
+      run.line = ui[lastPing.line];
+      run.markdown = [conversation.map((turn) => `${names[turn.ping]}: ${turn.text}`).join('\n')];
+    } else {
+      run.line = ui.askQuestion;
+      run.markdown = [ui.askQuestion];
+    }
+    run.said = run.line;
+
+    run.machine.sent();
+    if (!run.machine.received()) return;
+    if (codexStep) this.playSignalPings(run, codexStep.pings.map((ping) => ({ id: ping.id, line: ui[ping.line] })));
+    if (openingWeb) {
+      // F1 happens before the card is shown, so Snipaste's overlay is not covered.
+      const stay = await this.openWebWithShot(run, agents, url);
+      if (!stay || !this.alive(run)) return;
+    } else if (openNow) {
+      const opened = await agents.openDesktop(url);
+      if (!this.alive(run)) return;
+      if (!opened) {
+        run.line = ui.desktopMissing;
+        run.said = run.line;
+        run.markdown = [...run.markdown, run.line];
+      }
+    }
+    this.showRecord(run);
+    await this.finish(run);
+    if (!this.thread) return;
+    if (openNow) {
+      if (this.codexWait?.threadId === this.thread.id) this.codexWait = null;
+      return;
+    }
+    this.codexWait = {
+      kind: route.to === 'ask' ? route.for : 'codex',
+      threadId: this.thread.id, dirId: saved.dirId, overviewPath: saved.overviewPath, zoomPaths: saved.zoomPaths,
+      recordPath: saved.recordPath, app: page.app, title: page.title, selection: page.selection, text: page.text,
+      folder: page.folder, conversation,
+    };
+  }
+
+  /**
+   * Opens the ChatGPT page. On Windows, F1 goes out first and the new clipboard image is pasted. The card stays
+   * hidden until that wait is over. Enter is never sent.
+   */
+  private async openWebWithShot(run: Run, agents: NonNullable<AskDeps['agents']>, url: string): Promise<boolean> {
+    const ui = strings(run.lang).teammate.ui;
+    const snip = agents.snip;
+    const useShot = pasteShotOn(agents.platform) && snip !== undefined;
+    if (useShot) this.clearForSnip();
+    let got: 'image' | 'text' = 'text';
+    if (useShot && snip) {
+      try {
+        got = await snip.capture(() => !this.alive(run));
+      } catch (err: unknown) {
+        console.warn('[teammate] snipaste capture failed:', err);
+        got = 'text';
+      }
+    }
+    if (!this.alive(run)) {
+      if (got === 'image') snip?.release();
+      return false;
+    }
+    const opened = agents.openDesktop ? await agents.openDesktop(url) : false;
+    if (!this.alive(run)) {
+      if (got === 'image') snip?.release();
+      return false;
+    }
+    if (!opened) {
+      run.line = ui.webMissing;
+      run.said = run.line;
+      run.markdown = [...run.markdown, run.line];
+      if (got === 'image') snip?.release();
+      return true;
+    }
+    if (got === 'image' && snip) {
+      let pasted = false;
+      try {
+        pasted = await snip.paste();
+      } catch (err: unknown) {
+        console.warn('[teammate] snipaste paste failed:', err);
+      }
+      run.line = pasted ? ui.openedWebPasted : ui.openedWebClipboard;
+      run.said = run.line;
+      snip.release();
+      return true;
+    }
+    if (useShot) {
+      run.line = ui.openedWebText;
+      run.said = run.line;
+    }
+    return true;
+  }
+
+  /** A card or bubble already on screen would cover the region the user is about to snip. */
+  private clearForSnip(): void {
+    if (this.cardShown) {
+      this.deps.windows.hideNow('card');
+      this.cardShown = false;
+    }
+    if (this.bubbleShown) {
+      this.deps.windows.hideNow('bubble');
+      this.bubbleShown = false;
+    }
   }
 
   /**
@@ -1358,14 +1748,15 @@ export class AskController extends EventEmitter {
       spots: run.spots.length,
     };
     const agent = run.session ? { agent: run.session } : {};
+    const codex = run.codexLink ? { codex: run.codexLink } : {};
     const meta = {
-      title: (run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
-      profile: run.profile?.name ?? '', ...agent,
+      title: (run.recordTitle || run.line || run.intent.label).slice(0, TITLE_MAX), app: run.app, windowTitle: run.title,
+      profile: run.profile?.name ?? '', ...agent, ...codex,
     };
     // The thread is kept here first, so it continues even when history is off and append saves nothing.
     const now = this.deps.now();
     const local: ThreadRecord = run.thread
-      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry], ...agent }
+      ? { ...run.thread, lastActivity: now, entries: [...run.thread.entries, entry], ...agent, ...codex }
       : { id: randomUUID(), ...meta, started: now, lastActivity: now, entries: [entry] };
     this.thread = local;
     const saving = this.deps.history.append(run.thread?.id ?? null, entry, meta).catch(() => null);
@@ -1447,7 +1838,7 @@ export class AskController extends EventEmitter {
   private armBubble(run: Run, line: string): void {
     this.clearTimer('bubble');
     if (this.asking) return; // onAsking(false) starts its time
-    const ms = bubbleMs(line);
+    const ms = run.follow ? DISPATCH_BUBBLE_MS : bubbleMs(line);
     this.bubbleEndsAt = this.deps.now() + ms;
     this.bubbleTimer = this.timer(ms, () => {
       this.bubbleTimer = null;
@@ -1461,6 +1852,7 @@ export class AskController extends EventEmitter {
       // An answer's line always offers More, if only for the card's reply box; a failure's line doesn't.
       more: run.rest !== '' || run.markdown.length > 0 || (line !== '' && run.machine.failure === null),
       put: run.visitor ? null : this.put,
+      ...(run.follow ? { follow: run.follow } : {}),
     };
   }
 
@@ -1483,7 +1875,9 @@ export class AskController extends EventEmitter {
     entries.push(...(run.visitor ? pair.slice(1) : pair));
     return {
       view: 'card', lang: run.lang, tag: run.tag, entries, streaming,
-      title: run.thread?.title ?? (run.line || (run.visitor ? run.tag.name : run.intent.label)).slice(0, TITLE_MAX),
+      title: run.recordTitle
+        ?? run.thread?.title
+        ?? (run.line || (run.visitor ? run.tag.name : run.intent.label)).slice(0, TITLE_MAX),
       footer: {
         profile: run.profile?.name ?? '', model: run.profile?.kind === 'builtin' ? run.profile.model : '',
         route: run.route, tokens: run.tokens,
@@ -1496,6 +1890,8 @@ export class AskController extends EventEmitter {
       },
       put: run.visitor ? null : this.put,
       ...(run.visitor ? { answerOnly: true } : {}),
+      ...(run.follow ? { follow: run.follow } : {}),
+      ...(run.prompts ? { prompts: run.prompts } : {}),
     };
   }
 

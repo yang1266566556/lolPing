@@ -144,7 +144,7 @@ export class AgentRunner {
     const config = preset === null ? AGENT_PRESETS.claude.configFile(spec) : preset.configFile(spec);
     if (config !== null) await this.deps.writeFile(spec.mcpConfigPath, config);
 
-    const args = preset === null ? customArgv(p.customArgs, spec) : preset.args(spec);
+    const args = spec.argv ?? (preset === null ? customArgv(p.customArgs, spec) : preset.args(spec));
     const childEnv: NodeJS.ProcessEnv = {
       ...env, ...preset?.env(spec), ...agentBridgeEnv(spec.bridge.env), LOLPING_ASK_DIR: spec.askDir,
     };

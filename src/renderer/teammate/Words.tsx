@@ -37,7 +37,8 @@ export function Words({ s, t, act }: { s: WordsState; t: Strings['teammate']['ui
 
   const ask = (): void => {
     const words = text.trim();
-    if (words) act({ t: 'ask', text: words, newThread: s.thread === null || newThread });
+    if (!words) return;
+    act({ t: 'ask', text: words, newThread: s.thread === null || newThread });
   };
   return (
     <div className={sf.frame}>

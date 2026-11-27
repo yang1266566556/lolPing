@@ -1,3 +1,4 @@
+import { isCodexPromptId, type CodexPromptId } from './teammate/dispatch';
 import type { Lang } from './i18n';
 import type { PingTag } from './ipc';
 import type { PingId } from './pings';
@@ -39,6 +40,8 @@ export interface BubbleState {
   /** There is more than the line: the More button is shown. */
   more: boolean;
   put: PutState;
+  /** Opens the saved Codex desktop or ChatGPT website link again. */
+  follow?: 'codex' | 'chatgpt';
 }
 
 export interface CardState {
@@ -53,6 +56,10 @@ export interface CardState {
   put: PutState;
   /** An agent's unprompted answer: no reply box and no Whole picture, which would ask the user's own teammate. */
   answerOnly?: boolean;
+  /** Opens the saved Codex desktop or ChatGPT website link again. */
+  follow?: 'codex' | 'chatgpt';
+  /** Set only while On My Way is waiting for a reply that opens Codex. Not while Generic is waiting for a question. */
+  prompts?: readonly CodexPromptId[];
 }
 
 /** One thread in the History window's list. */
@@ -64,6 +71,10 @@ export interface HistoryThread {
   intents: PingId[];
   /** The agent profile's name when the thread's session can be opened in a terminal; the button reads "Open in" it. */
   agent?: string;
+  /** The signal was handed off: History can open that link again. */
+  codex?: boolean;
+  /** Which link the Open button reopens. Absent on a thread that was only saved. */
+  link?: 'codex' | 'chatgpt';
 }
 
 export interface HistoryState {
@@ -139,15 +150,20 @@ export type MateAction =
   | { t: 'close' }
   | { t: 'copy'; text: string }
   | { t: 'reply'; text: string }
+  /** A pre-written prompt on the waiting card. The id is stable; the label is not the instruction. */
+  | { t: 'preset'; id: CodexPromptId }
   | { t: 'deep' }
   | { t: 'history' }
   | { t: 'link'; url: string }
   | { t: 'ask'; text: string; newThread: boolean }
+  /** The bubble or card button: open the saved Codex or ChatGPT link again. */
+  | { t: 'follow' }
   | { t: 'cancel' }
   | { t: 'open'; id: string }
   | { t: 'continue'; id: string }
   | { t: 'delete'; id: string }
   | { t: 'openInAgent'; id: string }
+  | { t: 'openCodex'; id: string }
   | { t: 'search'; query: string }
   /** The bubble's or card's put button: the click is the user's consent to that paste or fill. */
   | { t: 'put' }
@@ -194,10 +210,10 @@ const THREAD_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
  * bubble and card also carry the put button.
  */
 const ALLOWED: Record<MateView, ReadonlySet<MateAction['t']>> = {
-  bubble: new Set(['more', 'dismiss', 'put']),
-  card: new Set(['close', 'copy', 'reply', 'deep', 'history', 'link', 'put']),
+  bubble: new Set(['more', 'dismiss', 'put', 'follow']),
+  card: new Set(['close', 'copy', 'reply', 'preset', 'deep', 'history', 'link', 'put', 'follow']),
   words: new Set(['ask', 'cancel']),
-  history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent']),
+  history: new Set(['open', 'continue', 'delete', 'search', 'openInAgent', 'openCodex']),
   consent: new Set(['allow', 'always', 'decline']),
   form: new Set(['fill', 'cancel']),
 };
@@ -232,6 +248,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'deep':
     case 'history':
     case 'put':
+    case 'follow':
       return { t: a.t };
     case 'cancel':
       return isSerial(a.serial) ? { t: 'cancel', serial: a.serial } : { t: 'cancel' };
@@ -243,8 +260,12 @@ function parse(a: Record<string, unknown>): MateAction | null {
       return typeof a.text === 'string' && a.text.length <= MATE_COPY_MAX ? { t: 'copy', text: a.text } : null;
     case 'reply':
       return words(a.text) ? { t: 'reply', text: a.text } : null;
+    case 'preset':
+      return isCodexPromptId(a.id) ? { t: 'preset', id: a.id } : null;
     case 'ask':
-      return words(a.text) && typeof a.newThread === 'boolean' ? { t: 'ask', text: a.text, newThread: a.newThread } : null;
+      return words(a.text) && typeof a.newThread === 'boolean'
+        ? { t: 'ask', text: a.text, newThread: a.newThread }
+        : null;
     case 'link': {
       const url = webUrl(a.url);
       return url ? { t: 'link', url } : null;
@@ -253,6 +274,7 @@ function parse(a: Record<string, unknown>): MateAction | null {
     case 'continue':
     case 'delete':
     case 'openInAgent':
+    case 'openCodex':
       return threadId(a.id) ? { t: a.t, id: a.id } : null;
     case 'fill': {
       const ids: unknown = a.ids;

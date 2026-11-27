@@ -38,10 +38,16 @@ describe('language', () => {
     const en = strings('en').teammate.ui;
     const zh = strings('zh-CN').teammate.ui;
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
-    for (const [key, value] of Object.entries(zh)) {
-      const text = typeof value === 'function' ? (value as (arg: number | string) => string)(1200) : value;
-      expect(text.trim(), key).not.toBe('');
-    }
+    const leaves = (v: unknown, key: string): void => {
+      if (typeof v === 'function') {
+        expect((v as (arg: number | string) => string)(1200).trim(), key).not.toBe('');
+      } else if (typeof v === 'string') {
+        expect(v.trim(), key).not.toBe('');
+      } else if (v !== null && typeof v === 'object') {
+        for (const [child, value] of Object.entries(v)) leaves(value, `${key}.${child}`);
+      }
+    };
+    leaves(zh, 'ui');
   });
 
   it('has every teammate failure line in both languages', () => {

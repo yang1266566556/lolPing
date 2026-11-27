@@ -14,8 +14,10 @@ describe('ping table', () => {
     expect(DEFAULT_WHEEL_PINGS.map((p) => p.id)).toEqual(DEFAULT_WHEEL);
   });
 
-  it('offers the generic, Bait, Vision Cleared and upside-down Missing pings beyond the default wheel', () => {
-    expect(ALL_PINGS.map((p) => p.id)).toEqual([...DEFAULT_WHEEL, 'generic', 'bait', 'visioncleared', 'missingflip']);
+  it('offers the generic, Bait, Vision Cleared, upside-down Missing and Dispatch pings beyond the default wheel', () => {
+    expect(ALL_PINGS.map((p) => p.id)).toEqual([
+      ...DEFAULT_WHEEL, 'generic', 'bait', 'visioncleared', 'missingflip',
+    ]);
   });
 
   it('draws the upside-down Missing ping with the rotated texture and the Enemy Missing sound', () => {

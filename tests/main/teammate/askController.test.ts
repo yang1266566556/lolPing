@@ -79,6 +79,8 @@ interface HarnessOptions {
   foregroundPid?: number;
   /** Hears the foreground app of each ask. */
   seenApp?: (app: string) => void;
+  /** Present when the ask can open Codex desktop. */
+  agents?: AskDeps['agents'];
 }
 
 interface Screen {
@@ -275,6 +277,7 @@ function harness(opts: HarnessOptions = {}) {
       },
       amend: async (threadId, at, done) => void amends.push({ threadId, at, done }),
     },
+    ...(opts.agents ? { agents: opts.agents } : {}),
     tempDir: () => 'tmp',
     thumbnail: (jpeg) => {
       thumbs.push(jpeg.toString());
@@ -292,6 +295,7 @@ function harness(opts: HarnessOptions = {}) {
       removeDir: async (d) => {
         for (const f of [...disk]) if (f === d || f.startsWith(`${d}/`)) disk.delete(f);
       },
+      copy: async (from, to) => void disk.add(to).add(from),
     },
   };
   const ctl = new AskController(deps);
@@ -2053,4 +2057,326 @@ describe('AskController', () => {
     expect(h.bubbles().map((b) => b.line)).toEqual([t.ask.failed.capture]);
     expect(h.ctl.running).toBe(false);
   });
+
+  it('pings first and opens Codex desktop only after a reply', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const h = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    h.ctl.ask([spot('omw')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(h.pings().map((p) => p.id)).toEqual(['generic']);
+    expect(h.appends.at(-1)?.line).toBe(t.ui.seeIt);
+    expect(h.cards().at(-1)?.follow).toBeUndefined();
+    expect(h.cards().at(-1)?.prompts).toEqual(['page', 'debug', 'explain', 'clearer', 'asked']);
+
+    h.ctl.ask([spot('generic')], { text: 'look at the null check', newThread: false });
+    await flush();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/^codex:\/\/threads\/new\?prompt=/);
+    expect(opened[0]).toContain('path=D%3A%5Cwork%5Capp');
+    expect(opened[0]).not.toContain('answer only');
+    expect(h.pings().map((p) => p.id)).toEqual(['generic', 'omw']);
+    expect(h.cards().at(-1)?.follow).toBe('codex');
+    expect(h.cards().at(-1)?.prompts).toBeUndefined();
+  });
+
+  it('opens Codex from a prompt chip, and a typed reply stays without that instruction', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const promptOf = (url: string): string => {
+      const q = url.slice(url.indexOf('prompt=') + 'prompt='.length).split('&')[0] ?? '';
+      return decodeURIComponent(q);
+    };
+    const chip = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    chip.ctl.ask([spot('omw')]);
+    await flush();
+    chip.ctl.onTeammateAction('card', { t: 'preset', id: 'page' });
+    await flush();
+    const filled = promptOf(opened[0] ?? '');
+    expect(filled.startsWith(t.ui.prompts.page.body)).toBe(true);
+    expect(filled).toContain(`User (generic): ${t.ui.prompts.page.label}`);
+    expect(filled).not.toContain('Look at this signal. Do not invent a task.');
+    expect(chip.pings().map((p) => p.id)).toEqual(['generic', 'omw']);
+
+    opened.length = 0;
+    const typed = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents });
+    typed.ctl.ask([spot('omw')]);
+    await flush();
+    typed.ctl.onTeammateAction('card', { t: 'reply', text: 'look at the null check' });
+    await flush();
+    const own = promptOf(opened[0] ?? '');
+    expect(own.startsWith('Look at this signal. Do not invent a task.')).toBe(true);
+    expect(own).toContain('look at the null check');
+    expect(own).not.toContain(t.ui.prompts.page.body);
+  });
+
+  it('opens ChatGPT for a simple signal, and asks a Generic question without the Codex chips', async () => {
+    const opened: string[] = [];
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        opened.push(url);
+        return true;
+      },
+    };
+    const webOf = (url: string): string => {
+      const parsed = new URL(url);
+      return parsed.searchParams.get('q') ?? '';
+    };
+    const screen = {
+      system: { selection: 'Hello there', spotTexts: ['a paragraph'], focus: null, address: '' },
+    };
+    const explain = harness({
+      teammate: {
+        profiles: [codex], defaultProfile: 'cx',
+        intents: { missingflip: { instruction: '把文字翻译为简体中文' } },
+      },
+      agents, screen,
+    });
+    explain.ctl.ask([spot('missing')]);
+    await flush();
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?q=/);
+    expect(opened[0]).not.toContain('hints=search');
+    const explained = webOf(opened[0] ?? '');
+    expect(explained.startsWith(t.intent.missing.instruction)).toBe(true);
+    expect(explained).toContain('Hello there');
+    expect(explained).toContain('notepad.exe');
+    expect(explained).not.toContain('signal.md');
+    expect(explained).not.toContain('overview.jpg');
+    expect(explain.cards().at(-1)?.follow).toBe('chatgpt');
+    expect(explain.cards().at(-1)?.prompts).toBeUndefined();
+    expect(explain.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWeb);
+    expect(explain.adapters).toEqual([]);
+
+    opened.length = 0;
+    const translated = harness({
+      teammate: {
+        profiles: [codex], defaultProfile: 'cx',
+        intents: { missingflip: { instruction: '把文字翻译为简体中文' } },
+      },
+      agents, screen,
+    });
+    translated.ctl.ask([spot('missingflip')]);
+    await flush();
+    expect(webOf(opened[0] ?? '').startsWith('把文字翻译为简体中文')).toBe(true);
+    expect(webOf(opened[0] ?? '')).not.toContain(t.intent.missingflip.instruction);
+
+    opened.length = 0;
+    const lookup = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    lookup.ctl.ask([spot('needvision')]);
+    await flush();
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?hints=search&q=/);
+
+    opened.length = 0;
+    const asking = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    asking.ctl.ask([spot('generic')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(asking.cards().at(-1)?.prompts).toBeUndefined();
+    expect(asking.cards().at(-1)?.follow).toBeUndefined();
+    expect(asking.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.askQuestion);
+    asking.ctl.onTeammateAction('card', { t: 'reply', text: 'what does this paragraph mean' });
+    await flush();
+    expect(opened[0]).toMatch(/^https:\/\/chatgpt\.com\/\?q=/);
+    expect(webOf(opened[0] ?? '')).toContain('what does this paragraph mean');
+    expect(webOf(opened[0] ?? '')).not.toContain('signal.md');
+    expect(asking.cards().at(-1)?.prompts).toBeUndefined();
+    expect(asking.cards().at(-1)?.follow).toBe('chatgpt');
+
+    opened.length = 0;
+    const later = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    later.ctl.ask([spot('bait')]);
+    await flush();
+    expect(opened).toEqual([]);
+    expect(later.adapters).toEqual([]);
+    expect(later.cards().at(-1)?.follow).toBeUndefined();
+    expect(later.cards().at(-1)?.title).toBe('notes.txt');
+    expect(later.appends.at(-1)?.line).toBe(t.ui.savedSpot);
+    expect(later.appends.at(-1)?.markdown).toContain('Hello there');
+    expect(later.appends.at(-1)?.markdown).toContain('notepad.exe');
+  });
+
+  it('pastes a Snipaste shot on Windows and skips it for a question, a save, Codex, and macOS', async () => {
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const screen = {
+      system: { selection: 'Hello there', spotTexts: ['a paragraph'], focus: null, address: '' },
+    };
+    const bag: { log: Entry[] } = { log: [] };
+    const steps: string[] = [];
+    const atShot: string[] = [];
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        steps.push('open');
+        return url.startsWith('https://chatgpt.com/');
+      },
+      snip: {
+        capture: async () => {
+          atShot.push(screenState(bag.log));
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return true;
+        },
+        release: () => steps.push('release'),
+      },
+    };
+    const pasted = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    bag.log = pasted.log;
+    pasted.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open', 'paste', 'release']);
+    expect(atShot).toEqual(['clear']);
+    expect(pasted.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebPasted);
+    expect(pasted.cards().at(-1)?.follow).toBe('chatgpt');
+    expect([...pasted.disk].some((p) => p.endsWith('.png'))).toBe(false);
+
+    steps.length = 0;
+    atShot.length = 0;
+    const textOnly = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'text';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return true;
+        },
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    textOnly.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open']);
+    expect(textOnly.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebText);
+
+    steps.length = 0;
+    const held = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return false;
+        },
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    held.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open', 'paste', 'release']);
+    expect(held.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebClipboard);
+
+    steps.length = 0;
+    atShot.length = 0;
+    const asking = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    bag.log = asking.log;
+    asking.ctl.ask([spot('generic')]);
+    await flush();
+    expect(steps).toEqual([]);
+    expect(asking.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.askQuestion);
+    asking.ctl.onTeammateAction('card', { t: 'reply', text: 'what does this paragraph mean' });
+    await flush();
+    expect(atShot).toEqual(['hidden']);
+    expect(steps[0]).toBe('f1');
+    expect(steps).toContain('paste');
+
+    steps.length = 0;
+    const later = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    later.ctl.ask([spot('bait')]);
+    await flush();
+    expect(steps).toEqual([]);
+
+    steps.length = 0;
+    const codexPath = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    codexPath.ctl.ask([spot('omw')]);
+    await flush();
+    expect(steps).toEqual([]);
+    expect(codexPath.cards().at(-1)?.prompts).toHaveLength(5);
+
+    steps.length = 0;
+    const mac = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      platform: 'mac',
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => true,
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    mac.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['open']);
+    expect(mac.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWeb);
+  });
 });
+
+/** Whether a record card is covering the screen at the moment F1 is about to go out. */
+function screenState(log: Entry[]): 'clear' | 'hidden' | 'covered' {
+  let covered = false;
+  let seen = false;
+  for (const [kind, view] of log) {
+    if (kind === 'card') {
+      seen = true;
+      covered = true;
+    }
+    if (kind === 'hiddenNow' && view === 'card') covered = false;
+  }
+  if (!seen) return 'clear';
+  return covered ? 'covered' : 'hidden';
+}

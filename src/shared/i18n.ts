@@ -37,6 +37,60 @@ const enMateUi = {
   tokens: (n: number) => `${n.toLocaleString('en')} tokens`,
   used: 'Used',
   ask: 'Ask about this spot',
+  /** The teammate's ping when the signal didn't already say what to do. */
+  seeIt: 'I see it. What do you need?',
+  /** The teammate heard a clear request. It does not add a task of its own. */
+  gotIt: 'Got it.',
+  /** On My Way, as Codex desktop opens. */
+  onIt: 'On my way.',
+  /** Opens the saved codex:// link again. */
+  openCodex: 'Open in Codex',
+  /** Opens the saved chatgpt.com link again. */
+  openChatgpt: 'Open in ChatGPT',
+  /** The desktop app or its link handler isn't there. */
+  desktopMissing: 'Couldn’t open Codex desktop. Install the ChatGPT app from the Microsoft Store, turn on Codex, then try again.',
+  /** The browser did not open the page. */
+  webMissing: 'Couldn’t open ChatGPT.',
+  /** ChatGPT's website is open. The user still presses Enter. macOS, and Windows when no shot was tried. */
+  openedWeb: 'Opened in ChatGPT. Press Enter once there.',
+  /** Windows tried Snipaste and no new image arrived. */
+  openedWebText: 'Opened in ChatGPT with the text only. Press Enter once there.',
+  /** F1's image was pasted into the composer. The user still presses Enter. */
+  openedWebPasted: 'Screenshot pasted into ChatGPT. Press Enter once there.',
+  /** The image is on the clipboard, but the paste keys could not be confirmed. */
+  openedWebClipboard: 'Screenshot is still on the clipboard. Click the composer, press Ctrl+V, then Enter.',
+  /** Generic had no question yet. The five Codex prompts are not part of this wait. */
+  askQuestion: 'What do you want to ask?',
+  /** Bait: the spot is in history. No model was asked. */
+  savedSpot: 'Saved for later.',
+  savedTitleLabel: 'Title',
+  savedSummaryLabel: 'Summary',
+  savedFromLabel: 'From',
+  /** Sits after the task, before the page. A screenshot is pasted into the same message. ChatGPT cannot ping or edit the screen. */
+  webFraming: 'You are on the ChatGPT website. A screenshot will be pasted into this same message; use that image. You cannot place lolPing pings or edit the screen. Put any rewritten, extracted, or translated text in a copyable block. Do not invent text that is not in the image or the context.',
+  /** Short label on the chip; the body is what Codex's composer is filled with. Ids are stable, not the label. */
+  prompts: {
+    page: {
+      label: 'What’s on this page',
+      body: 'Look at the screenshots and the spot I marked. Using the window title, the page text, and anything I selected, explain in a few sentences what this is and where the key information is. Ask if something is unclear. Do not invent anything that is not on the screen.',
+    },
+    debug: {
+      label: 'Debug this',
+      body: 'From the errors, logs, or warnings on the screen, name the most likely cause and the next step to check or fix it. Start from the spot I marked and any selected text. Do not invent errors that are not shown.',
+    },
+    explain: {
+      label: 'Explain this',
+      body: 'Explain only the text I selected; if nothing is selected, explain the text near the signal. Say what it means and why it is written that way, with a short example if needed. Do not turn it into a tutorial.',
+    },
+    clearer: {
+      label: 'Make this clearer',
+      body: 'Rewrite the selected text so it is clearer and smoother, keeping the original meaning. Give the rewritten text first, then one or two sentences on what you changed.',
+    },
+    asked: {
+      label: 'Do what I asked',
+      body: 'Using this page, the working folder, and what I just said with the signal, do only the thing I asked. If something is missing, ask one question first. Do not widen the task.',
+    },
+  },
   newThread: 'New thread',
   historyTitle: 'Teammate history',
   search: 'Search',
@@ -150,6 +204,8 @@ interface MateAskText {
     /** The working folder (a fixed one, or where the thread's session was) is gone. */
     noFolder: (name: string) => string;
   };
+  /** The card footer when the signal is handed to Codex desktop. */
+  desktopRoute: string;
   /** A spot refused while the ask key is held: a fifth one, or one on another display than the first. */
   spotsFull: string;
   spotsDisplay: string;
@@ -203,6 +259,7 @@ const enMateAsk: MateAskText = {
     addLolPing: (where) => ` Check that lolPing is in ${where ?? 'its MCP settings'}.`,
     noFolder: (name) => `The folder ${name} isn’t there any more.`,
   },
+  desktopRoute: 'Codex desktop',
   spotsFull: 'Up to 4 spots per ask',
   spotsDisplay: 'Spots in one ask stay on one screen',
   spots: (n) => `${n} spots`,
@@ -287,6 +344,10 @@ const enMateSettings = {
   removeFolderLabel: (path: string) => `Remove ${path}`,
   agentTimeout: 'Time limit',
   agentTimeoutUnit: 'minutes',
+  dispatchTitle: 'Open in Codex desktop',
+  dispatchDesc: 'Do it opens Codex desktop, and asks what you need first when you have not said. Save for later is kept in history on this computer. The other signals open chatgpt.com with that signal’s task. You press Enter once. Off until you turn it on.',
+  dispatchFolder: 'Working folder',
+  dispatchFolderDesc: 'The project folder above. Codex opens there.',
   agentArgs: 'Arguments',
   agentArgsDesc: 'One argument per line. {prompt} is the line that tells the agent to read the ask, {askDir} the folder with the ask, {mcpConfig} a file that connects the agent to lolPing.',
   agentApprovals: {
@@ -1138,6 +1199,45 @@ const zh: Strings = {
       tokens: (n: number) => `${n.toLocaleString('zh-CN')} 个词元`,
       used: '用到',
       ask: '问问这个位置',
+      seeIt: '看到了，要我干什么？',
+      gotIt: '收到。',
+      onIt: '出发了。',
+      openCodex: '在 Codex 中打开',
+      openChatgpt: '在 ChatGPT 中打开',
+      desktopMissing: '没能打开 Codex 桌面版。请从 Microsoft Store 安装 ChatGPT 应用，打开 Codex，然后再试一次。',
+      webMissing: '没能打开 ChatGPT。',
+      openedWeb: '已在 ChatGPT 中打开。你在网页里按一次回车。',
+      openedWebText: '已在 ChatGPT 中打开，这次只有文字。你在网页里按一次回车。',
+      openedWebPasted: '截图已贴进 ChatGPT。你在网页里按一次回车。',
+      openedWebClipboard: '截图还在剪贴板里。点一下输入框，按 Ctrl+V，再按回车。',
+      askQuestion: '你想问什么？',
+      savedSpot: '已存入历史。',
+      savedTitleLabel: '标题',
+      savedSummaryLabel: '摘要',
+      savedFromLabel: '来源',
+      webFraming: '你在 ChatGPT 网页里。同一条消息里会贴上一张截图，请看这张图。你不能放 lolPing 信号，也不能改屏幕上的内容。把改写、提取或翻译的文字放进可以复制的代码块。不要编造截图和上下文里没有的文字。',
+      prompts: {
+        page: {
+          label: '看懂这一页',
+          body: '先看截图和我点的位置，结合窗口标题、页面文字和我选中的内容，用几句话说明这是什么、关键信息在哪。有不清楚的再问我，不要编造屏幕上没有的东西。',
+        },
+        debug: {
+          label: '排查问题',
+          body: '根据屏幕上的报错、日志或异常提示，判断最可能的原因，并给出下一步该怎么查或怎么改。先看我圈到的位置和选中的文字，不要编造没出现的报错。',
+        },
+        explain: {
+          label: '解释这段',
+          body: '只解释我选中的文字；如果没有选中，就解释信号附近的那段。讲清它在说什么、为什么这样写，必要时举一个短例子，不要展开成教程。',
+        },
+        clearer: {
+          label: '改得更好',
+          body: '在尽量保持原意的前提下，改写我选中的文字，让它更清楚、更顺。直接给出改好的文本，再用一两句说明改了什么。',
+        },
+        asked: {
+          label: '按我说的做',
+          body: '结合眼前的页面、工作目录，以及我刚用信号说的话，完成我提出的那件事。只做我说的范围，缺信息就先问一句，不要自行扩大任务。',
+        },
+      },
       newThread: '新对话',
       historyTitle: '队友历史',
       search: '搜索',
@@ -1254,6 +1354,7 @@ const zh: Strings = {
         noFolder: (name) => `文件夹 ${name} 已经不在了。`,
         addLolPing: (where) => (where === null ? '请检查它的 MCP 设置里是否加了 lolPing。' : `请检查 ${where} 里是否加了 lolPing。`),
       },
+      desktopRoute: 'Codex 桌面版',
       spotsFull: '一次最多 4 处',
       spotsDisplay: '一次提问的几处要在同一块屏幕上',
       spots: (n) => `${n} 处`,
@@ -1316,6 +1417,10 @@ const zh: Strings = {
       removeFolderLabel: (path) => `移除 ${path}`,
       agentTimeout: '时间限制',
       agentTimeoutUnit: '分钟',
+      dispatchTitle: '在 Codex 桌面版中打开',
+      dispatchDesc: '帮我做会打开 Codex 桌面版；你还没说要做什么时，会先问一句。稍后看记在这台电脑的历史里。其他信号按该信号的任务打开 chatgpt.com。你在那边按一次回车。默认关闭。',
+      dispatchFolder: '工作文件夹',
+      dispatchFolderDesc: '就是上面的项目文件夹。Codex 在那里打开。',
       agentArgs: '参数',
       agentArgsDesc: '每行一个参数。{prompt} 是让代理去读提问的那一句，{askDir} 是存放提问的文件夹，{mcpConfig} 是让代理连上 lolPing 的文件。',
       agentApprovals: {
