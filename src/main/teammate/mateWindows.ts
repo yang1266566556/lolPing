@@ -170,7 +170,7 @@ export class MateWindows extends EventEmitter {
    * Hides the window now, without the leave motion: a paste is about to click, and the helper refuses a click that
    * would land on a window of lolPing's, even one still fading out. A consent card or preview takes no more clicks.
    */
-  hideNow(view: 'bubble' | 'consent' | 'form'): void {
+  hideNow(view: 'bubble' | 'card' | 'consent' | 'form'): void {
     const slot = this.slots[view];
     if (slot.leaveTimer) clearTimeout(slot.leaveTimer);
     slot.leaveTimer = null;

@@ -24,6 +24,7 @@ import { isSessionId, type ThreadRecord } from '../../shared/teammate/history';
 import { intentFor } from '../../shared/teammate/intents';
 import { bubbleMs, lineFromMarkdown, splitLine } from '../../shared/teammate/line';
 import { resolveTarget, type Mark } from '../../shared/teammate/marks';
+import { pasteShotOn } from '../../shared/teammate/snipaste';
 import { needsKey } from '../../shared/teammate/providers';
 import { route, type RouteReason } from '../../shared/teammate/router';
 import {
@@ -111,6 +112,15 @@ export interface AskDeps {
     }): Promise<boolean>;
     /** Opens a codex:// link in the desktop app. False when the handler isn't there. Never starts a terminal. */
     openDesktop?(url: string): Promise<boolean>;
+    /**
+     * Windows: F1 for the user's Snipaste hotkey, then paste the new clipboard image. Absent on macOS.
+     * The image stays on the clipboard. Nothing here writes it to a file.
+     */
+    snip?: {
+      capture(cancelled: () => boolean): Promise<'image' | 'text'>;
+      paste(): Promise<boolean>;
+      release(): void;
+    };
   };
   /** Folder that keeps a signal's screenshots after the ask's temp folder is deleted. */
   recordsDir?: () => string;
@@ -1240,11 +1250,15 @@ export class AskController extends EventEmitter {
     run.machine.sent();
     if (!run.machine.received()) return;
     if (codexStep) this.playSignalPings(run, codexStep.pings.map((ping) => ({ id: ping.id, line: ui[ping.line] })));
-    if (openNow) {
+    if (openingWeb) {
+      // F1 happens before the card is shown, so Snipaste's overlay is not covered.
+      const stay = await this.openWebWithShot(run, agents, url);
+      if (!stay || !this.alive(run)) return;
+    } else if (openNow) {
       const opened = await agents.openDesktop(url);
       if (!this.alive(run)) return;
       if (!opened) {
-        run.line = openingWeb ? ui.webMissing : ui.desktopMissing;
+        run.line = ui.desktopMissing;
         run.said = run.line;
         run.markdown = [...run.markdown, run.line];
       }
@@ -1262,6 +1276,71 @@ export class AskController extends EventEmitter {
       recordPath: saved.recordPath, app: page.app, title: page.title, selection: page.selection, text: page.text,
       folder: page.folder, conversation,
     };
+  }
+
+  /**
+   * Opens the ChatGPT page. On Windows, F1 goes out first and the new clipboard image is pasted. The card stays
+   * hidden until that wait is over. Enter is never sent.
+   */
+  private async openWebWithShot(run: Run, agents: NonNullable<AskDeps['agents']>, url: string): Promise<boolean> {
+    const ui = strings(run.lang).teammate.ui;
+    const snip = agents.snip;
+    const useShot = pasteShotOn(agents.platform) && snip !== undefined;
+    if (useShot) this.clearForSnip();
+    let got: 'image' | 'text' = 'text';
+    if (useShot && snip) {
+      try {
+        got = await snip.capture(() => !this.alive(run));
+      } catch (err: unknown) {
+        console.warn('[teammate] snipaste capture failed:', err);
+        got = 'text';
+      }
+    }
+    if (!this.alive(run)) {
+      if (got === 'image') snip?.release();
+      return false;
+    }
+    const opened = agents.openDesktop ? await agents.openDesktop(url) : false;
+    if (!this.alive(run)) {
+      if (got === 'image') snip?.release();
+      return false;
+    }
+    if (!opened) {
+      run.line = ui.webMissing;
+      run.said = run.line;
+      run.markdown = [...run.markdown, run.line];
+      if (got === 'image') snip?.release();
+      return true;
+    }
+    if (got === 'image' && snip) {
+      let pasted = false;
+      try {
+        pasted = await snip.paste();
+      } catch (err: unknown) {
+        console.warn('[teammate] snipaste paste failed:', err);
+      }
+      run.line = pasted ? ui.openedWebPasted : ui.openedWebClipboard;
+      run.said = run.line;
+      snip.release();
+      return true;
+    }
+    if (useShot) {
+      run.line = ui.openedWebText;
+      run.said = run.line;
+    }
+    return true;
+  }
+
+  /** A card or bubble already on screen would cover the region the user is about to snip. */
+  private clearForSnip(): void {
+    if (this.cardShown) {
+      this.deps.windows.hideNow('card');
+      this.cardShown = false;
+    }
+    if (this.bubbleShown) {
+      this.deps.windows.hideNow('bubble');
+      this.bubbleShown = false;
+    }
   }
 
   /**

@@ -217,6 +217,11 @@ describe('chatgptPrompt', () => {
     expect(prompt).not.toContain('signal.md');
     expect(prompt).not.toContain('overview.jpg');
     expect(prompt).not.toContain('codex-signals');
+    expect(prompt).not.toMatch(/[A-Za-z]:\\/);
+    expect(prompt).not.toMatch(/\.png|\.jpe?g/i);
+    expect(framing.toLowerCase()).toContain('screenshot');
+    expect(framing.toLowerCase()).toContain('pasted');
+    expect(strings('zh-CN').teammate.ui.webFraming).toContain('截图');
   });
 
   it('uses a custom instruction and leaves empty fields out', () => {

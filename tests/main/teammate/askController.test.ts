@@ -2183,6 +2183,7 @@ describe('AskController', () => {
     expect(explained).not.toContain('overview.jpg');
     expect(explain.cards().at(-1)?.follow).toBe('chatgpt');
     expect(explain.cards().at(-1)?.prompts).toBeUndefined();
+    expect(explain.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWeb);
     expect(explain.adapters).toEqual([]);
 
     opened.length = 0;
@@ -2232,4 +2233,150 @@ describe('AskController', () => {
     expect(later.appends.at(-1)?.markdown).toContain('Hello there');
     expect(later.appends.at(-1)?.markdown).toContain('notepad.exe');
   });
+
+  it('pastes a Snipaste shot on Windows and skips it for a question, a save, Codex, and macOS', async () => {
+    const codex: AgentProfile = {
+      id: 'cx', kind: 'agent', name: 'Codex', tagColor: 3, tagColorCustom: null, preset: 'codex', command: 'codex',
+      customArgs: [], folder: { kind: 'fixed', path: 'D:\\work\\app' }, timeoutS: 300, dispatch: { on: true },
+    };
+    const screen = {
+      system: { selection: 'Hello there', spotTexts: ['a paragraph'], focus: null, address: '' },
+    };
+    const bag: { log: Entry[] } = { log: [] };
+    const steps: string[] = [];
+    const atShot: string[] = [];
+    const agents: NonNullable<AskDeps['agents']> = {
+      runner: { start: async () => { throw new Error('no exec'); } } as NonNullable<AskDeps['agents']>['runner'],
+      bridge: { command: () => null },
+      env: async () => ({}),
+      home: () => 'C:\\Users\\me',
+      platform: 'win',
+      openDesktop: async (url) => {
+        steps.push('open');
+        return url.startsWith('https://chatgpt.com/');
+      },
+      snip: {
+        capture: async () => {
+          atShot.push(screenState(bag.log));
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return true;
+        },
+        release: () => steps.push('release'),
+      },
+    };
+    const pasted = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    bag.log = pasted.log;
+    pasted.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open', 'paste', 'release']);
+    expect(atShot).toEqual(['clear']);
+    expect(pasted.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebPasted);
+    expect(pasted.cards().at(-1)?.follow).toBe('chatgpt');
+    expect([...pasted.disk].some((p) => p.endsWith('.png'))).toBe(false);
+
+    steps.length = 0;
+    atShot.length = 0;
+    const textOnly = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'text';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return true;
+        },
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    textOnly.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open']);
+    expect(textOnly.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebText);
+
+    steps.length = 0;
+    const held = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => {
+          steps.push('paste');
+          return false;
+        },
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    held.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['f1', 'open', 'paste', 'release']);
+    expect(held.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWebClipboard);
+
+    steps.length = 0;
+    atShot.length = 0;
+    const asking = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    bag.log = asking.log;
+    asking.ctl.ask([spot('generic')]);
+    await flush();
+    expect(steps).toEqual([]);
+    expect(asking.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.askQuestion);
+    asking.ctl.onTeammateAction('card', { t: 'reply', text: 'what does this paragraph mean' });
+    await flush();
+    expect(atShot).toEqual(['hidden']);
+    expect(steps[0]).toBe('f1');
+    expect(steps).toContain('paste');
+
+    steps.length = 0;
+    const later = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    later.ctl.ask([spot('bait')]);
+    await flush();
+    expect(steps).toEqual([]);
+
+    steps.length = 0;
+    const codexPath = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents, screen });
+    codexPath.ctl.ask([spot('omw')]);
+    await flush();
+    expect(steps).toEqual([]);
+    expect(codexPath.cards().at(-1)?.prompts).toHaveLength(5);
+
+    steps.length = 0;
+    const mac = harness({ teammate: { profiles: [codex], defaultProfile: 'cx' }, agents: {
+      ...agents,
+      platform: 'mac',
+      snip: {
+        capture: async () => {
+          steps.push('f1');
+          return 'image';
+        },
+        paste: async () => true,
+        release: () => steps.push('release'),
+      },
+    }, screen });
+    mac.ctl.ask([spot('missing')]);
+    await flush();
+    expect(steps).toEqual(['open']);
+    expect(mac.cards().at(-1)?.entries.at(-1)?.line).toBe(t.ui.openedWeb);
+  });
 });
+
+/** Whether a record card is covering the screen at the moment F1 is about to go out. */
+function screenState(log: Entry[]): 'clear' | 'hidden' | 'covered' {
+  let covered = false;
+  let seen = false;
+  for (const [kind, view] of log) {
+    if (kind === 'card') {
+      seen = true;
+      covered = true;
+    }
+    if (kind === 'hiddenNow' && view === 'card') covered = false;
+  }
+  if (!seen) return 'clear';
+  return covered ? 'covered' : 'hidden';
+}

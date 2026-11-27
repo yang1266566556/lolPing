@@ -51,8 +51,14 @@ const enMateUi = {
   desktopMissing: 'Couldn’t open Codex desktop. Install the ChatGPT app from the Microsoft Store, turn on Codex, then try again.',
   /** The browser did not open the page. */
   webMissing: 'Couldn’t open ChatGPT.',
-  /** ChatGPT's website is open. The user still presses Enter. */
+  /** ChatGPT's website is open. The user still presses Enter. macOS, and Windows when no shot was tried. */
   openedWeb: 'Opened in ChatGPT. Press Enter once there.',
+  /** Windows tried Snipaste and no new image arrived. */
+  openedWebText: 'Opened in ChatGPT with the text only. Press Enter once there.',
+  /** F1's image was pasted into the composer. The user still presses Enter. */
+  openedWebPasted: 'Screenshot pasted into ChatGPT. Press Enter once there.',
+  /** The image is on the clipboard, but the paste keys could not be confirmed. */
+  openedWebClipboard: 'Screenshot is still on the clipboard. Click the composer, press Ctrl+V, then Enter.',
   /** Generic had no question yet. The five Codex prompts are not part of this wait. */
   askQuestion: 'What do you want to ask?',
   /** Bait: the spot is in history. No model was asked. */
@@ -60,8 +66,8 @@ const enMateUi = {
   savedTitleLabel: 'Title',
   savedSummaryLabel: 'Summary',
   savedFromLabel: 'From',
-  /** Sits after the task, before the page. ChatGPT cannot ping or edit the screen. */
-  webFraming: 'You are on the ChatGPT website. You cannot place lolPing pings or edit the screen. Put any rewritten, extracted, or translated text in a copyable block. Do not invent text that is not in the context.',
+  /** Sits after the task, before the page. A screenshot is pasted into the same message. ChatGPT cannot ping or edit the screen. */
+  webFraming: 'You are on the ChatGPT website. A screenshot will be pasted into this same message; use that image. You cannot place lolPing pings or edit the screen. Put any rewritten, extracted, or translated text in a copyable block. Do not invent text that is not in the image or the context.',
   /** Short label on the chip; the body is what Codex's composer is filled with. Ids are stable, not the label. */
   prompts: {
     page: {
@@ -1201,12 +1207,15 @@ const zh: Strings = {
       desktopMissing: '没能打开 Codex 桌面版。请从 Microsoft Store 安装 ChatGPT 应用，打开 Codex，然后再试一次。',
       webMissing: '没能打开 ChatGPT。',
       openedWeb: '已在 ChatGPT 中打开。你在网页里按一次回车。',
+      openedWebText: '已在 ChatGPT 中打开，这次只有文字。你在网页里按一次回车。',
+      openedWebPasted: '截图已贴进 ChatGPT。你在网页里按一次回车。',
+      openedWebClipboard: '截图还在剪贴板里。点一下输入框，按 Ctrl+V，再按回车。',
       askQuestion: '你想问什么？',
       savedSpot: '已存入历史。',
       savedTitleLabel: '标题',
       savedSummaryLabel: '摘要',
       savedFromLabel: '来源',
-      webFraming: '你在 ChatGPT 网页里。你不能放 lolPing 信号，也不能改屏幕上的内容。把改写、提取或翻译的文字放进可以复制的代码块。不要编造上下文里没有的文字。',
+      webFraming: '你在 ChatGPT 网页里。同一条消息里会贴上一张截图，请看这张图。你不能放 lolPing 信号，也不能改屏幕上的内容。把改写、提取或翻译的文字放进可以复制的代码块。不要编造截图和上下文里没有的文字。',
       prompts: {
         page: {
           label: '看懂这一页',

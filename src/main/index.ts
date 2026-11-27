@@ -3,7 +3,7 @@ import {
 } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -61,6 +61,7 @@ import { findExecutable, userPath, withPath } from './teammate/agents/command';
 import { launchTerminal } from './teammate/agents/openInTerminal';
 import { AgentRunner, isExecutable, killProcessTree, searchPath } from './teammate/agents/runner';
 import { AskController, bridgeHandler } from './teammate/askController';
+import { createSnipaste, liveSnipaste, pngFromClipboardItems, writeClipboardSnap } from './teammate/snipastePaste';
 import { AskGesture } from './teammate/askGesture';
 import { ContextClient } from './teammate/contextClient';
 import { installedEditors } from './teammate/editors';
@@ -959,6 +960,17 @@ function start(): void {
             && launchTerminal({ spawn, platform: PLATFORM, cwd, file, args, env });
         },
         openDesktop: (url) => shell.openExternal(url).then(() => true, () => false),
+        snip: createSnipaste(liveSnipaste({
+          platform: PLATFORM,
+          readImage: async () => pngFromClipboardItems(await clipboard.read(), (bytes) => {
+            const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+            return image.isEmpty() ? null : new Uint8Array(image.toPNG());
+          }),
+          readText: () => clipboard.readText(),
+          restore: (prior) => writeClipboardSnap(prior, clipboard, ClipboardItem),
+          exists: existsSync,
+          env: process.env,
+        })),
       },
       recordsDir: () => join(userData, 'codex-signals'),
       settings: () => settings,
